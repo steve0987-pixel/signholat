@@ -1,3 +1,5 @@
+import React from "react";
+
 const tabs = [
   { key: "submission", label: "Submission", icon: "+" },
   { key: "dashboard", label: "Dashboard", icon: "#" },

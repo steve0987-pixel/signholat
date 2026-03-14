@@ -1,3 +1,5 @@
+import React from "react";
+
 import { formatDateTime, shortText, statusToTone } from "../utils/reportUtils";
 
 export default function ReportCard({ report, compact = false }) {

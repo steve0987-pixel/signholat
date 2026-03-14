@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import React, { useMemo } from "react";
 import ReportCard from "../components/ReportCard";
 
 export default function ProfilePage({ user, reports }) {

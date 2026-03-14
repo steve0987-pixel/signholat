@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import ReportCard from "../components/ReportCard";
 import StatsBar from "../components/StatsBar";
 import { CATEGORIES, DATE_FILTERS, STATUS_OPTIONS } from "../constants/options";

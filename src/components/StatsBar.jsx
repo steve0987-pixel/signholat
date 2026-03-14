@@ -1,3 +1,5 @@
+import React from "react";
+
 export default function StatsBar({ reports }) {
   const total = reports.length;
   const verified = reports.filter((r) => r.status === "Verified").length;
