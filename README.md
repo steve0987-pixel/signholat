@@ -23,22 +23,25 @@ Real Holat is a Telegram Mini App (Web App) MVP for public infrastructure transp
 
 3. Open the local URL shown by Vite in your browser.
 
-## Bot backend setup (.env)
+## Bot backend setup (.env, Python)
 
-This project now includes a simple Telegram bot backend that sends a Web App button.
+This project now includes a simple Python Telegram bot backend that sends a Web App button.
 
 1. Open .env and fill values:
    TELEGRAM_BOT_TOKEN=your_new_bot_token
    MINI_APP_URL=https://your-https-url
    MENU_BUTTON_TEXT=Open Real Holat
 
-2. Install dependencies:
+2. Install frontend dependencies:
    npm install
 
-3. Run frontend:
+3. Install Python dependencies:
+   python -m pip install -r requirements.txt
+
+4. Run frontend:
    npm run dev
 
-4. Run bot backend in another terminal:
+5. Run bot backend in another terminal:
    npm run bot:dev
 
 Commands supported by bot:
@@ -118,7 +121,7 @@ Then open your bot chat and tap menu button.
 
 Send a message from your bot with a web_app button pointing to your Mini App URL.
 
-This repository includes that behavior in backend/bot.js via /start and /open.
+This repository includes that behavior in backend/bot.py via /start and /open.
 
 If you are not writing backend yet, Method A is enough for MVP demos.
 
