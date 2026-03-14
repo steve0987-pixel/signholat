@@ -23,6 +23,34 @@ Real Holat is a Telegram Mini App (Web App) MVP for public infrastructure transp
 
 3. Open the local URL shown by Vite in your browser.
 
+## Android app (Capacitor)
+
+Android wrapper is added to this repository.
+
+Important files:
+- capacitor.config.json
+- android/
+
+One-time setup:
+1. Install dependencies:
+   npm install
+2. Make sure Android Studio is installed.
+3. Make sure Android SDK + emulator are installed in Android Studio.
+
+Daily workflow:
+1. Build web app and sync to Android project:
+   npm run android:sync
+2. Open Android Studio project:
+   npm run android:open
+3. In Android Studio, run app on emulator/device.
+
+APK build:
+1. Open android folder in Android Studio.
+2. Build -> Build Bundle(s) / APK(s) -> Build APK(s)
+3. Android Studio shows path to generated APK.
+
+If you change frontend code, run npm run android:sync again before rebuilding APK.
+
 ## Bot backend setup (.env, Python)
 
 This project now includes a simple Python Telegram bot backend that sends a Web App button.

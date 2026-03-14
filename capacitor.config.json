@@ -1,0 +1,6 @@
+{
+  "appId": "com.signholat.app",
+  "appName": "Real Holat",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}
