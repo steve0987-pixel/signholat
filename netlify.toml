@@ -3,6 +3,21 @@
   publish = "dist"
 
 [[redirects]]
+  from = "/api/ai/duplicate-check"
+  to = "/.netlify/functions/ai-duplicate-check"
+  status = 200
+
+[[redirects]]
+  from = "/api/ai/title-summary"
+  to = "/.netlify/functions/ai-title-summary"
+  status = 200
+
+[[redirects]]
+  from = "/api/ai/priority-explanation"
+  to = "/.netlify/functions/ai-priority-explanation"
+  status = 200
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200

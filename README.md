@@ -81,6 +81,68 @@ Notes:
 - .env is gitignored
 - Use .env.example as template
 
+## Map API key integration
+
+The dashboard map reads map config from Vite env variables.
+
+Add these fields to .env:
+VITE_MAP_API_KEY=YOUR_ORGANIZER_KEY
+VITE_MAP_TILE_URL_TEMPLATE=https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key={key}
+VITE_MAP_ATTRIBUTION=&copy; MapTiler &copy; OpenStreetMap contributors
+
+Notes:
+- If your provider uses another tile URL format, put it in VITE_MAP_TILE_URL_TEMPLATE.
+- Keep {key} in the URL template so the app can inject VITE_MAP_API_KEY.
+- Restart frontend after changing .env.
+
+## GEOASR API integration
+
+Dashboard now loads organizer datasets from GEOASR APIs with Bearer token.
+
+Add to .env:
+VITE_GEOASR_BEARER_TOKEN=YOUR_GEOASR_BEARER
+VITE_GEOASR_MAKTAB44_URL=https://duasr.uz/api4/maktab44
+VITE_GEOASR_BOGCHA_URL=https://duasr.uz/api4/bogcha
+VITE_GEOASR_SSV_URL=https://duasr.uz/api4/ssv
+
+Behavior:
+- GEOASR dataset counters are shown in Dashboard (maktab44, bogcha, ssv).
+- If GEOASR response includes coordinate fields (lat/lng variants), they are auto-plotted on map.
+- If coordinates are absent, data still loads in counters while map shows only report markers.
+
+Security note:
+- .env is not committed, but VITE_* values are exposed to browser runtime.
+- For production, move Bearer token to backend proxy and call proxy from frontend.
+
+## Server-side AI assistance
+
+The app now uses GROQ only through internal server endpoints. The client never calls GROQ directly and does not read the API key.
+
+Add to `.env`:
+`GROQ_API_KEY=YOUR_GROQ_KEY`
+`GROQ_MODEL=llama-3.3-70b-versatile`
+
+Internal endpoints:
+- `/api/ai/duplicate-check`
+- `/api/ai/title-summary`
+- `/api/ai/priority-explanation`
+
+What they do:
+- duplicate check before final submission
+- short title + summary preview while typing
+- short priority explanation on report detail surfaces
+
+Fallback mode:
+- if GROQ is unavailable or env vars are missing, the app returns deterministic fallback values
+- report submission still works
+- duplicate check defaults to non-blocking create-new guidance
+- title/summary and priority explanation remain short and UI-safe
+
+Implementation notes:
+- local development uses Vite internal middleware for `/api/ai/*`
+- Netlify production uses serverless functions routed through `netlify.toml`
+- no `GROQ_API_KEY` is exposed through `import.meta.env`
+
 ## Build
 
 - Production build:

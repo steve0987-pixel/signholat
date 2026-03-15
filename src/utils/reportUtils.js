@@ -1,5 +1,5 @@
-export function formatDateTime(isoString) {
-  return new Date(isoString).toLocaleString([], {
+export function formatDateTime(isoString, locale) {
+  return new Date(isoString).toLocaleString(locale ? [locale] : [], {
     month: "short",
     day: "numeric",
     hour: "2-digit",
