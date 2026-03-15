@@ -39,8 +39,20 @@ export function statusToTone(status) {
   }
 }
 
+export function sanitizeText(text) {
+  if (!text) return "";
+  // Simple safety filter for inappropriate filler/seeds
+  const blackList = [/пздц/gi, /fuck/gi, /shit/gi];
+  let cleaned = text;
+  blackList.forEach((regex) => {
+    cleaned = cleaned.replace(regex, "****");
+  });
+  return cleaned;
+}
+
 export function shortText(text, maxLength = 92) {
   if (!text) return "";
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength).trim()}...`;
+  const cleaned = sanitizeText(text);
+  if (cleaned.length <= maxLength) return cleaned;
+  return `${cleaned.slice(0, maxLength).trim()}...`;
 }

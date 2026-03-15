@@ -213,7 +213,7 @@ export default function DashboardPage({
 
   return (
     <section className="tab-page">
-      <header className="page-header civic-header">
+      <header className="civic-header">
         <p className="civic-eyebrow">Public overview</p>
         <h1>Real Holat Pulse</h1>
         <p>See where issues are happening, what repeats, and where attention is needed now.</p>

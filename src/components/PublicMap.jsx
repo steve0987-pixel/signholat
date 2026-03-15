@@ -243,21 +243,9 @@ export default function PublicMap({ reports, geoAsrItems = [], geoAsrData, onRep
   return (
     <section className="panel map-panel">
       {hotspots.length ? (
-        <div
-          style={{
-            display: "grid",
-            gap: "8px",
-            marginBottom: "12px"
-          }}
-        >
-          <div style={{ fontSize: "13px", fontWeight: 700, color: "#132238" }}>Hotspots</div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-              gap: "8px"
-            }}
-          >
+        <div className="hotspot-section">
+          <div className="hotspot-title">Hotspots</div>
+          <div className="hotspot-grid">
             {hotspots.map((report) => {
               const coords = parseReportLatLng(report.location);
               const severityStyle = getSeverityStyle(report.severity);
@@ -267,28 +255,22 @@ export default function PublicMap({ reports, geoAsrItems = [], geoAsrData, onRep
                 <button
                   key={report.id}
                   type="button"
+                  className="hotspot-card"
                   onClick={() => {
                     if (!coords || !mapInstance) return;
                     mapInstance.flyTo([coords.lat, coords.lng], 15, { duration: 0.8 });
                   }}
                   style={{
-                    appearance: "none",
-                    border: "1px solid #dbe5f2",
-                    borderLeft: `4px solid ${severityStyle.color}`,
-                    borderRadius: "12px",
-                    background: "#f8fbff",
-                    padding: "10px",
-                    textAlign: "left",
-                    cursor: coords && mapInstance ? "pointer" : "default",
-                    display: "grid",
-                    gap: "6px"
+                    "--severity-color": severityStyle.color
                   }}
                 >
-                  <strong style={{ fontSize: "13px", lineHeight: 1.3 }}>{getHotspotSummary(report)}</strong>
-                  <span style={{ fontSize: "12px", color: "#355070" }}>
-                    {impactValue !== null ? `Impact ${impactValue.toFixed(1)} / 10` : "No impact score"} -{" "}
-                    {shortText(report.location || "No address", 26)}
-                  </span>
+                  <strong>{getHotspotSummary(report)}</strong>
+                  <div className="hotspot-meta">
+                    <span className="hotspot-impact">
+                      {impactValue !== null ? `Impact ${impactValue.toFixed(1)} / 10` : "No impact score"}
+                    </span>
+                    <span>{shortText(report.location || "No address", 26)}</span>
+                  </div>
                 </button>
               );
             })}
