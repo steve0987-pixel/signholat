@@ -268,6 +268,103 @@ export function getUserParticipationStats(state, userId, repeatedReportIds = new
   };
 }
 
+function normalizeActionType(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "confirm" || normalized === "confirmation") return "confirm";
+  if (normalized === "evidence") return "evidence";
+  return "";
+}
+
+export function buildParticipationStateFromEvents(events = []) {
+  const base = createEmptyParticipationState();
+  if (!Array.isArray(events) || !events.length) return base;
+
+  const confirmationsByReport = {};
+  const evidenceByReport = {};
+
+  events.forEach((event) => {
+    const reportId = String(event?.reportId ?? event?.report_id ?? "").trim();
+    const userId = stringifyUserId(event?.userId ?? event?.user_id);
+    const actionType = normalizeActionType(event?.actionType ?? event?.action_type);
+    const createdAt = String(event?.createdAt ?? event?.created_at ?? new Date().toISOString());
+
+    if (!reportId || !userId || !actionType) return;
+
+    if (actionType === "confirm") {
+      const current = normalizeConfirmations(confirmationsByReport[reportId] || []);
+      if (current.some((entry) => entry.userId === userId)) return;
+
+      confirmationsByReport[reportId] = [...current, { userId, createdAt }];
+      return;
+    }
+
+    if (actionType === "evidence") {
+      const note = clipText(event?.note || "", 240);
+      if (!note || note.length < 8) return;
+
+      const current = normalizeEvidence(evidenceByReport[reportId] || []);
+      const evidence = {
+        id: String(event?.id || `ev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+        userId,
+        note,
+        createdAt
+      };
+      evidenceByReport[reportId] = [...current, evidence];
+    }
+  });
+
+  return {
+    version: 1,
+    confirmationsByReport,
+    evidenceByReport
+  };
+}
+
+export function mergeParticipationStates(baseState, incomingState) {
+  const base = baseState || createEmptyParticipationState();
+  const incoming = incomingState || createEmptyParticipationState();
+
+  const confirmationsByReport = { ...base.confirmationsByReport };
+  Object.entries(incoming.confirmationsByReport || {}).forEach(([reportId, entries]) => {
+    const baseEntries = normalizeConfirmations(confirmationsByReport[reportId] || []);
+    const incomingEntries = normalizeConfirmations(entries);
+
+    incomingEntries.forEach((entry) => {
+      if (baseEntries.some((baseEntry) => baseEntry.userId === entry.userId)) return;
+      baseEntries.push(entry);
+    });
+
+    confirmationsByReport[reportId] = baseEntries;
+  });
+
+  const evidenceByReport = { ...base.evidenceByReport };
+  Object.entries(incoming.evidenceByReport || {}).forEach(([reportId, entries]) => {
+    const baseEntries = normalizeEvidence(evidenceByReport[reportId] || []);
+    const incomingEntries = normalizeEvidence(entries);
+
+    incomingEntries.forEach((entry) => {
+      const duplicate = baseEntries.some(
+        (baseEntry) =>
+          (baseEntry.id && entry.id && baseEntry.id === entry.id) ||
+          (baseEntry.userId === entry.userId &&
+            baseEntry.note === entry.note &&
+            String(baseEntry.createdAt) === String(entry.createdAt))
+      );
+      if (!duplicate) {
+        baseEntries.push(entry);
+      }
+    });
+
+    evidenceByReport[reportId] = baseEntries;
+  });
+
+  return {
+    version: 1,
+    confirmationsByReport,
+    evidenceByReport
+  };
+}
+
 export function getRepeatedReportIdSet(reports = [], radiusMeters = 400) {
   const repeated = new Set();
 

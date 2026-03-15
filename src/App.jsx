@@ -2,23 +2,47 @@ import React, { useEffect, useMemo, useState } from "react";
 import BottomNav from "./components/BottomNav";
 import LanguageSwitcher from "./components/LanguageSwitcher";
 import DashboardPage from "./pages/DashboardPage";
+import IssueDetailPage from "./pages/IssueDetailPage";
+import ObjectDetailPage from "./pages/ObjectDetailPage";
 import ProfilePage from "./pages/ProfilePage";
 import SubmitPage from "./pages/SubmitPage";
+import { normalizeStatus } from "./constants/statusLifecycle";
 import { sampleReports } from "./data/sampleReports";
+import {
+  createReportPeerAction,
+  fetchReportCommunityActivity,
+  toParticipationEvents
+} from "./services/community";
 import { fetchGeoAsrData } from "./services/geoasr";
-import { createStoredReport, fetchStoredReports, updateStoredReportEnrichment } from "./services/reports";
+import { createParticipationEvent, fetchParticipationEvents } from "./services/participationStore";
+import {
+  createStoredReport,
+  fetchStoredReports,
+  updateStoredReportEnrichment,
+  updateStoredReportStatus
+} from "./services/reports";
 import { syncDemoReportsToSupabase } from "./services/seedDemoReports";
+import { createStatusHistoryEvent, fetchStatusHistory } from "./services/statusHistory";
 import {
   addReportConfirmation,
   addReportEvidence,
+  buildParticipationStateFromEvents,
   createEmptyParticipationState,
   getRepeatedReportIdSet,
   getReportParticipation,
   getUserParticipationStats,
   loadParticipationState,
+  mergeParticipationStates,
   saveParticipationState
 } from "./utils/participation";
+import {
+  appendStatusHistoryEvent,
+  buildSyntheticStatusHistory,
+  createStatusEvent,
+  mergeStatusHistoryMaps
+} from "./utils/reportLifecycle";
 import { updateStreak } from "./utils/streak";
+import { buildObjectIndex, getObjectKeyFromReport } from "./utils/objectModel";
 import { calculateXP } from "./utils/xp";
 
 function getTelegramUser() {
@@ -58,7 +82,8 @@ function normalizeReport(report) {
     media,
     mediaUrl: report.mediaUrl || report.image || "",
     mediaType: report.mediaType || "image",
-    submittedAt: report.submittedAt || createdAt
+    submittedAt: report.submittedAt || createdAt,
+    status: normalizeStatus(report.status)
   };
 
   return {
@@ -69,7 +94,7 @@ function normalizeReport(report) {
 
 function getUserReputation(allReports, userId) {
   return allReports
-    .filter((report) => report.userId === userId)
+    .filter((report) => String(report.userId) === String(userId))
     .reduce((total, report) => total + (report.xpAwarded || 0), 0);
 }
 
@@ -93,11 +118,73 @@ function groupGeoAsrItems(items = []) {
   return grouped;
 }
 
+function mergeStatusHistoryWithFallback(reports, remoteMap) {
+  const syntheticMap = reports.reduce((acc, report) => {
+    acc[report.id] = buildSyntheticStatusHistory(report);
+    return acc;
+  }, {});
+
+  return mergeStatusHistoryMaps(syntheticMap, remoteMap || {});
+}
+
+function shouldUseLegacyParticipationFallback(errorCode) {
+  const code = String(errorCode || "");
+
+  if (!code) return false;
+
+  return (
+    code === "peer_action_unavailable" ||
+    code.startsWith("peer_action_404") ||
+    code.startsWith("peer_action_405") ||
+    code.startsWith("peer_action_500") ||
+    code.startsWith("peer_action_502") ||
+    code.startsWith("peer_action_503")
+  );
+}
+
+async function fetchCommunitySignals(reportIds = []) {
+  const normalizedIds = Array.from(new Set(reportIds.map((value) => String(value || "").trim()).filter(Boolean)));
+  if (!normalizedIds.length) {
+    return {
+      summaryByReport: {},
+      events: [],
+      available: false
+    };
+  }
+
+  const responses = await Promise.all(
+    normalizedIds.map(async (reportId) => {
+      const result = await fetchReportCommunityActivity(reportId);
+      return { reportId, result };
+    })
+  );
+
+  const summaryByReport = {};
+  const events = [];
+  let availableCount = 0;
+
+  responses.forEach(({ reportId, result }) => {
+    if (!result?.activity) return;
+
+    availableCount += 1;
+    summaryByReport[reportId] = result.activity.summary || null;
+    events.push(...toParticipationEvents(result.activity.recentActions));
+  });
+
+  return {
+    summaryByReport,
+    events,
+    available: availableCount > 0
+  };
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("submission");
   const [user] = useState(getTelegramUser);
   const [reports, setReports] = useState(() => sampleReports.map(normalizeReport));
   const [participationState, setParticipationState] = useState(loadParticipationState);
+  const [communitySummaryByReport, setCommunitySummaryByReport] = useState({});
+  const [statusHistoryByReport, setStatusHistoryByReport] = useState({});
   const [reputationPoints, setReputationPoints] = useState(() => {
     const currentUser = getTelegramUser();
     const seededReports = sampleReports.map(normalizeReport);
@@ -105,6 +192,8 @@ export default function App() {
     return getUserReputation(seededReports, currentUser.id);
   });
   const [lastXpEvent, setLastXpEvent] = useState(null);
+  const [issueDetailId, setIssueDetailId] = useState("");
+  const [objectDetailKey, setObjectDetailKey] = useState("");
   const [geoAsrState, setGeoAsrState] = useState({
     data: createEmptyGeoAsrData(),
     loading: true,
@@ -132,7 +221,7 @@ export default function App() {
         setGeoAsrState({
           data: createEmptyGeoAsrData(),
           loading: false,
-          error: error?.message || "Не удалось загрузить GEOASR"
+          error: error?.message || "Failed to load GEOASR data"
         });
       }
     }
@@ -146,23 +235,52 @@ export default function App() {
   useEffect(() => {
     let active = true;
 
-    async function loadStoredReports() {
-      let { reports: storedReports } = await fetchStoredReports();
-      if (!active || storedReports === null) return;
+    async function loadStoredReportsAndSignals() {
+      let loadedReports = sampleReports.map(normalizeReport);
+      const { reports: storedReports } = await fetchStoredReports();
 
-      if (Array.isArray(storedReports) && storedReports.length === 0) {
-        await syncDemoReportsToSupabase();
-        const reload = await fetchStoredReports();
-        if (!active || reload.reports === null) return;
-        storedReports = reload.reports;
+      if (Array.isArray(storedReports)) {
+        if (storedReports.length === 0) {
+          await syncDemoReportsToSupabase();
+          const reload = await fetchStoredReports();
+          if (Array.isArray(reload.reports) && reload.reports.length) {
+            loadedReports = reload.reports.map(normalizeReport);
+          }
+        } else {
+          loadedReports = storedReports.map(normalizeReport);
+        }
       }
 
-      const normalizedStoredReports = storedReports.map(normalizeReport);
-      setReports(normalizedStoredReports);
-      setReputationPoints(getUserReputation(normalizedStoredReports, user.id));
+      if (!active) return;
+
+      setReports(loadedReports);
+      setReputationPoints(getUserReputation(loadedReports, user.id));
+
+      const reportIds = loadedReports.map((report) => report.id);
+      const [communitySignals, legacyParticipation, remoteStatusHistory] = await Promise.all([
+        fetchCommunitySignals(reportIds),
+        fetchParticipationEvents(),
+        fetchStatusHistory(reportIds)
+      ]);
+
+      if (!active) return;
+
+      setCommunitySummaryByReport(communitySignals.summaryByReport || {});
+
+      const combinedEvents = [
+        ...(Array.isArray(communitySignals.events) ? communitySignals.events : []),
+        ...(Array.isArray(legacyParticipation.events) ? legacyParticipation.events : [])
+      ];
+
+      if (combinedEvents.length) {
+        const remoteParticipationState = buildParticipationStateFromEvents(combinedEvents);
+        setParticipationState((prev) => mergeParticipationStates(prev, remoteParticipationState));
+      }
+
+      setStatusHistoryByReport(mergeStatusHistoryWithFallback(loadedReports, remoteStatusHistory.map || {}));
     }
 
-    loadStoredReports();
+    loadStoredReportsAndSignals();
     return () => {
       active = false;
     };
@@ -171,6 +289,23 @@ export default function App() {
   useEffect(() => {
     saveParticipationState(participationState);
   }, [participationState]);
+
+  useEffect(() => {
+    setStatusHistoryByReport((prev) => {
+      let next = prev;
+      let changed = false;
+
+      reports.forEach((report) => {
+        if (Array.isArray(prev[report.id]) && prev[report.id].length > 0) return;
+
+        const synthetic = buildSyntheticStatusHistory(report);
+        next = mergeStatusHistoryMaps(next, { [report.id]: synthetic });
+        changed = true;
+      });
+
+      return changed ? next : prev;
+    });
+  }, [reports]);
 
   const sortedReports = useMemo(() => {
     return [...reports].sort((a, b) => {
@@ -186,11 +321,16 @@ export default function App() {
   const reportsWithParticipation = useMemo(() => {
     return sortedReports.map((report) => {
       const participation = getReportParticipation(participationState, report.id, user.id);
+      const summary = communitySummaryByReport[String(report.id)] || null;
+      const summaryConfirmations = Number(summary?.confirm) || 0;
+      const summaryEvidence = Number(summary?.evidence) || 0;
+      const storedConfirmations = Number(report.confirmationsCount) || 0;
+      const storedEvidence = Number(report.evidenceCount) || 0;
 
       return {
         ...report,
-        confirmationsCount: (Number(report.confirmationsCount) || 0) + participation.confirmationsCount,
-        evidenceCount: participation.evidenceCount,
+        confirmationsCount: Math.max(storedConfirmations, summaryConfirmations, participation.confirmationsCount),
+        evidenceCount: Math.max(storedEvidence, summaryEvidence, participation.evidenceCount),
         latestEvidence: participation.latestEvidence,
         userParticipation: {
           hasConfirmed: participation.hasConfirmed,
@@ -199,11 +339,30 @@ export default function App() {
         isRepeatedIssue: repeatedReportIds.has(String(report.id))
       };
     });
-  }, [participationState, repeatedReportIds, sortedReports, user.id]);
+  }, [communitySummaryByReport, participationState, repeatedReportIds, sortedReports, user.id]);
 
   const participationStats = useMemo(() => {
     return getUserParticipationStats(participationState, user.id, repeatedReportIds);
   }, [participationState, repeatedReportIds, user.id]);
+
+  const objectIndex = useMemo(() => {
+    return buildObjectIndex(reportsWithParticipation);
+  }, [reportsWithParticipation]);
+
+  const selectedIssue = useMemo(() => {
+    if (!issueDetailId) return null;
+    return reportsWithParticipation.find((report) => String(report.id) === String(issueDetailId)) || null;
+  }, [issueDetailId, reportsWithParticipation]);
+
+  const selectedObject = useMemo(() => {
+    if (!objectDetailKey) return null;
+    return objectIndex[objectDetailKey] || null;
+  }, [objectDetailKey, objectIndex]);
+
+  const selectedObjectReports = useMemo(() => {
+    if (!selectedObject) return [];
+    return selectedObject.reports || [];
+  }, [selectedObject]);
 
   const handleSubmitReport = async (payload) => {
     const createdAt = new Date().toISOString();
@@ -219,7 +378,7 @@ export default function App() {
       mediaType: payload.mediaType,
       createdAt,
       submittedAt: createdAt,
-      status: "New",
+      status: "Submitted",
       userId: user.id,
       reporterName: getReporterName(user),
       aiTitle: payload.aiTitle,
@@ -250,6 +409,19 @@ export default function App() {
     const streakCount = updateStreak();
 
     setReports((prev) => [hydratedReport, ...prev]);
+    setStatusHistoryByReport((prev) =>
+      appendStatusHistoryEvent(
+        prev,
+        hydratedReport.id,
+        createStatusEvent({
+          reportId: hydratedReport.id,
+          status: "Submitted",
+          note: "Report submitted",
+          changedBy: user.id,
+          createdAt
+        })
+      )
+    );
     setReputationPoints((prev) => prev + xpGained);
     setLastXpEvent({
       id: `xp-${Date.now()}`,
@@ -258,6 +430,13 @@ export default function App() {
       streakCount
     });
     setActiveTab("dashboard");
+
+    void createStatusHistoryEvent({
+      reportId: hydratedReport.id,
+      status: "Submitted",
+      note: "Report submitted",
+      changedBy: user.id
+    });
 
     return { xpGained };
   };
@@ -285,7 +464,7 @@ export default function App() {
     });
   };
 
-  const handleConfirmReport = (reportId) => {
+  const handleConfirmReport = async (reportId) => {
     if (!reportId) return { ok: false, message: "Invalid report." };
 
     const currentReport = reportsWithParticipation.find((report) => String(report.id) === String(reportId));
@@ -293,36 +472,192 @@ export default function App() {
     if (String(currentReport.userId) === String(user.id)) {
       return { ok: false, message: "Self-confirmation is disabled." };
     }
+    if (currentReport.userParticipation?.hasConfirmed) {
+      return { ok: false, message: "You already confirmed this report." };
+    }
 
-    const result = addReportConfirmation(participationState, {
+    const actor = {
+      telegramUserId: Number.isFinite(Number(user.id)) ? Number(user.id) : null,
+      username: user.username || "",
+      displayName: getReporterName(user)
+    };
+
+    const backendResult = await createReportPeerAction(reportId, {
+      actionType: "confirm",
+      actor
+    });
+
+    if (backendResult.action) {
+      const remoteState = buildParticipationStateFromEvents([backendResult.action]);
+      setParticipationState((prev) => mergeParticipationStates(prev, remoteState));
+
+      if (backendResult.summary) {
+        setCommunitySummaryByReport((prev) => ({
+          ...prev,
+          [String(reportId)]: backendResult.summary
+        }));
+      }
+
+      return { ok: true, message: "Confirmation added." };
+    }
+
+    if (String(backendResult.error || "").includes("409")) {
+      return { ok: false, message: "You already confirmed this report." };
+    }
+
+    if (!shouldUseLegacyParticipationFallback(backendResult.error)) {
+      return { ok: false, message: "Unable to add confirmation right now." };
+    }
+
+    const localResult = addReportConfirmation(participationState, {
       reportId,
       userId: user.id
     });
 
-    if (!result.added) {
+    if (!localResult.added) {
       return { ok: false, message: "You already confirmed this report." };
     }
 
-    setParticipationState(result.state || createEmptyParticipationState());
-    return { ok: true, message: "Confirmation added." };
+    setParticipationState(localResult.state || createEmptyParticipationState());
+
+    const legacyResult = await createParticipationEvent({
+      reportId,
+      userId: user.id,
+      actionType: "confirm"
+    });
+
+    if (legacyResult.event) {
+      const remoteState = buildParticipationStateFromEvents([legacyResult.event]);
+      setParticipationState((prev) => mergeParticipationStates(prev, remoteState));
+      return { ok: true, message: "Confirmation added." };
+    }
+
+    return { ok: true, message: "Confirmation added (saved locally, remote sync unavailable)." };
   };
 
-  const handleAddEvidence = (reportId, note) => {
+  const handleAddEvidence = async (reportId, note) => {
     if (!reportId) return { ok: false, message: "Invalid report." };
+    const actor = {
+      telegramUserId: Number.isFinite(Number(user.id)) ? Number(user.id) : null,
+      username: user.username || "",
+      displayName: getReporterName(user)
+    };
 
-    const result = addReportEvidence(participationState, {
+    const backendResult = await createReportPeerAction(reportId, {
+      actionType: "evidence",
+      note,
+      actor
+    });
+
+    if (backendResult.action) {
+      const remoteState = buildParticipationStateFromEvents([backendResult.action]);
+      setParticipationState((prev) => mergeParticipationStates(prev, remoteState));
+
+      if (backendResult.summary) {
+        setCommunitySummaryByReport((prev) => ({
+          ...prev,
+          [String(reportId)]: backendResult.summary
+        }));
+      }
+
+      return { ok: true, message: "Evidence added." };
+    }
+
+    if (String(backendResult.error || "").includes("400")) {
+      return { ok: false, message: "Evidence note is too short." };
+    }
+
+    if (!shouldUseLegacyParticipationFallback(backendResult.error)) {
+      return { ok: false, message: "Unable to save evidence right now." };
+    }
+
+    const localResult = addReportEvidence(participationState, {
       reportId,
       userId: user.id,
       note
     });
 
-    if (!result.added) {
+    if (!localResult.added) {
       return { ok: false, message: "Evidence note is too short." };
     }
 
-    setParticipationState(result.state || createEmptyParticipationState());
-    return { ok: true, message: "Evidence added." };
+    setParticipationState(localResult.state || createEmptyParticipationState());
+
+    const legacyResult = await createParticipationEvent({
+      reportId,
+      userId: user.id,
+      actionType: "evidence",
+      note
+    });
+
+    if (legacyResult.event) {
+      const remoteState = buildParticipationStateFromEvents([legacyResult.event]);
+      setParticipationState((prev) => mergeParticipationStates(prev, remoteState));
+      return { ok: true, message: "Evidence added." };
+    }
+
+    return { ok: true, message: "Evidence added (saved locally, remote sync unavailable)." };
   };
+
+  const handleAdvanceStatus = async (reportId, nextStatus) => {
+    if (!reportId || !nextStatus) return { ok: false, message: "Invalid status update." };
+
+    const normalizedNextStatus = normalizeStatus(nextStatus);
+
+    setReports((prev) =>
+      prev.map((report) => {
+        if (String(report.id) !== String(reportId)) return report;
+        return {
+          ...report,
+          status: normalizedNextStatus
+        };
+      })
+    );
+
+    const statusEvent = createStatusEvent({
+      reportId,
+      status: normalizedNextStatus,
+      note: `Moved to ${normalizedNextStatus}`,
+      changedBy: user.id
+    });
+
+    setStatusHistoryByReport((prev) => appendStatusHistoryEvent(prev, reportId, statusEvent));
+
+    void updateStoredReportStatus(reportId, normalizedNextStatus);
+    void createStatusHistoryEvent({
+      reportId,
+      status: normalizedNextStatus,
+      note: `Moved to ${normalizedNextStatus}`,
+      changedBy: user.id
+    });
+
+    return { ok: true, message: `Status moved to ${normalizedNextStatus}.` };
+  };
+
+  const handleOpenIssueDetail = (reportId) => {
+    if (!reportId) return;
+    setIssueDetailId(String(reportId));
+    setObjectDetailKey("");
+    setActiveTab("dashboard");
+  };
+
+  const handleOpenObjectFromReport = (reportId) => {
+    const report = reportsWithParticipation.find((item) => String(item.id) === String(reportId));
+    if (!report) return;
+
+    const key = getObjectKeyFromReport(report);
+    setObjectDetailKey(key);
+    setIssueDetailId("");
+    setActiveTab("dashboard");
+  };
+
+  const handleBackToDashboard = () => {
+    setIssueDetailId("");
+    setObjectDetailKey("");
+    setActiveTab("dashboard");
+  };
+
+  const isDetailView = Boolean(selectedIssue || selectedObject);
 
   return (
     <div className="app-shell">
@@ -332,10 +667,45 @@ export default function App() {
           <LanguageSwitcher />
         </div>
 
-        {activeTab === "submission" ? (
-          <SubmitPage geoAsrData={geoAsrState.data} onSubmit={handleSubmitReport} reports={reportsWithParticipation} />
+        {selectedIssue ? (
+          <IssueDetailPage
+            report={selectedIssue}
+            reports={reportsWithParticipation}
+            statusHistory={statusHistoryByReport[selectedIssue.id] || buildSyntheticStatusHistory(selectedIssue)}
+            onBack={handleBackToDashboard}
+            onConfirmReport={handleConfirmReport}
+            onAddEvidence={handleAddEvidence}
+            onAdvanceStatus={handleAdvanceStatus}
+            onOpenIssueDetail={handleOpenIssueDetail}
+            onOpenObjectDetail={handleOpenObjectFromReport}
+            currentUserId={user.id}
+            geoAsrData={geoAsrState.data}
+          />
         ) : null}
-        {activeTab === "dashboard" ? (
+
+        {!selectedIssue && selectedObject ? (
+          <ObjectDetailPage
+            object={selectedObject}
+            reports={selectedObjectReports}
+            onBack={handleBackToDashboard}
+            onOpenIssueDetail={handleOpenIssueDetail}
+            onConfirmReport={handleConfirmReport}
+            onAddEvidence={handleAddEvidence}
+            currentUserId={user.id}
+            geoAsrData={geoAsrState.data}
+          />
+        ) : null}
+
+        {!isDetailView && activeTab === "submission" ? (
+          <SubmitPage
+            geoAsrData={geoAsrState.data}
+            onSubmit={handleSubmitReport}
+            onConfirmExistingIssue={handleConfirmReport}
+            reports={reportsWithParticipation}
+          />
+        ) : null}
+
+        {!isDetailView && activeTab === "dashboard" ? (
           <DashboardPage
             geoAsrData={geoAsrState.data}
             geoAsrError={geoAsrState.error}
@@ -343,15 +713,20 @@ export default function App() {
             onAddEvidence={handleAddEvidence}
             onConfirmReport={handleConfirmReport}
             onReportEnriched={handleReportEnriched}
+            onOpenIssueDetail={handleOpenIssueDetail}
+            onOpenObjectDetail={handleOpenObjectFromReport}
+            onAdvanceStatus={handleAdvanceStatus}
             reports={reportsWithParticipation}
             reputationPoints={reputationPoints}
             user={user}
           />
         ) : null}
-        {activeTab === "profile" ? (
+
+        {!isDetailView && activeTab === "profile" ? (
           <ProfilePage
             lastXpEvent={lastXpEvent}
             onAcknowledgeXpEvent={handleAcknowledgeXpEvent}
+            onOpenIssueDetail={handleOpenIssueDetail}
             participationStats={participationStats}
             reports={reportsWithParticipation}
             reputationPoints={reputationPoints}
@@ -359,7 +734,7 @@ export default function App() {
           />
         ) : null}
       </main>
-      <BottomNav activeTab={activeTab} onChange={setActiveTab} />
+      {!isDetailView ? <BottomNav activeTab={activeTab} onChange={setActiveTab} /> : null}
     </div>
   );
 }

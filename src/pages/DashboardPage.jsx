@@ -1,40 +1,13 @@
 import React, { useMemo, useState } from "react";
-import ReportCard from "../components/ReportCard";
+import OnboardingAssistant from "../components/OnboardingAssistant";
 import PublicMap from "../components/PublicMap";
-import StatsBar from "../components/StatsBar";
-import { DATE_FILTERS, STATUS_OPTIONS } from "../constants/options";
+import { STATUS_OPTIONS } from "../constants/options";
 import { useI18n } from "../i18n/LanguageProvider";
 import { parseReportLatLng } from "../utils/enrichReport";
-import { getDateThreshold, shortText } from "../utils/reportUtils";
-import { calculateXP } from "../utils/xp";
+import { buildObjectIndex } from "../utils/objectModel";
+import { shortText, statusToTone } from "../utils/reportUtils";
 
-const ENDPOINT_CATEGORY_OPTIONS = [{ value: "maktab44" }, { value: "bogcha" }, { value: "ssv" }];
-const REVIEW_STATUSES = new Set(["New", "Under Review"]);
-const STATUS_TIMELINE_ORDER = ["New", "Under Review", "Verified", "Resolved"];
-
-function severityWeight(severity) {
-  switch (severity) {
-    case "critical":
-      return 4;
-    case "high":
-      return 3;
-    case "medium":
-      return 2;
-    case "low":
-      return 1;
-    default:
-      return 0;
-  }
-}
-
-function getDisplayName(user) {
-  return user.username ? `@${user.username}` : `${user.firstName} ${user.lastName}`.trim();
-}
-
-function getContributorInitials(name) {
-  const cleaned = name.replace("@", "").trim();
-  return cleaned.slice(0, 2).toUpperCase() || "RH";
-}
+const SOURCE_OPTIONS = ["all", "maktab44", "bogcha", "ssv"];
 
 function flattenGeoAsrData(geoAsrData = {}) {
   return Object.entries(geoAsrData).flatMap(([source, items]) => {
@@ -56,78 +29,143 @@ function getReportSignalKey(report) {
   return `${report.category}|${String(report.placeName || "").trim().toLowerCase()}`;
 }
 
+function severityScore(severity) {
+  switch (String(severity || "").toLowerCase()) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function getPlaceLabel(report) {
+  const placeName = String(report.placeName || "").trim();
+  if (placeName) return shortText(placeName, 42);
+
+  if (parseReportLatLng(report.location)) return "Location on map";
+
+  return shortText(report.location || "Location not specified", 42);
+}
+
+function getPriorityReason(report, isRepeatedIssue) {
+  const severity = String(report.severity || "").toLowerCase();
+  const confirmationsCount = Number(report.confirmationsCount) || 0;
+
+  if (severity === "critical" || severity === "high") {
+    return "High severity near essential public infrastructure.";
+  }
+
+  if (isRepeatedIssue) {
+    return "Repeated issue signal from nearby reports.";
+  }
+
+  if (confirmationsCount >= 2) {
+    return "Multiple community confirmations received.";
+  }
+
+  if (report.status === "In Progress") {
+    return "Work started, still needs public follow-up.";
+  }
+
+  if (report.status === "Under Review") {
+    return "Awaiting verification by responsible services.";
+  }
+
+  return "Needs public attention and review.";
+}
+
+function sortAttentionIssues(left, right, repeatedReportIds) {
+  const leftImpact = Number(left.impact_score) > 0 ? Number(left.impact_score) : null;
+  const rightImpact = Number(right.impact_score) > 0 ? Number(right.impact_score) : null;
+
+  if (rightImpact !== null || leftImpact !== null) {
+    if (leftImpact === null) return 1;
+    if (rightImpact === null) return -1;
+    if (rightImpact !== leftImpact) return rightImpact - leftImpact;
+  }
+
+  const leftRepeated = repeatedReportIds.has(String(left.id)) ? 1 : 0;
+  const rightRepeated = repeatedReportIds.has(String(right.id)) ? 1 : 0;
+  if (rightRepeated !== leftRepeated) return rightRepeated - leftRepeated;
+
+  const severityDiff = severityScore(right.severity) - severityScore(left.severity);
+  if (severityDiff !== 0) return severityDiff;
+
+  const confirmationsDiff = (Number(right.confirmationsCount) || 0) - (Number(left.confirmationsCount) || 0);
+  if (confirmationsDiff !== 0) return confirmationsDiff;
+
+  return getReportTimestamp(right) - getReportTimestamp(left);
+}
+
 export default function DashboardPage({
-  onAddEvidence,
-  onConfirmReport,
   geoAsrData,
   geoAsrError,
   geoAsrLoading,
   onReportEnriched,
-  reports,
-  user,
-  reputationPoints
+  onOpenIssueDetail,
+  onOpenObjectDetail,
+  reports
 }) {
-  const { getSourceLabel, getStatusLabel, t } = useI18n();
+  const { getStatusLabel, t } = useI18n();
   const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("all");
   const [status, setStatus] = useState("all");
-  const [dateFilter, setDateFilter] = useState("all");
-  const [sources, setSources] = useState({
-    reports: true,
-    maktab44: true,
-    bogcha: true,
-    ssv: true
-  });
+  const [reportCategory, setReportCategory] = useState("all");
+  const [objectSource, setObjectSource] = useState("all");
+  const [focusMode, setFocusMode] = useState("issues");
+  const [showAll, setShowAll] = useState(false);
 
   const allGeoAsrItems = useMemo(() => flattenGeoAsrData(geoAsrData), [geoAsrData]);
 
+  const reportCategories = useMemo(() => {
+    return [...new Set((reports || []).map((report) => report.category).filter(Boolean))];
+  }, [reports]);
+
   const filteredReports = useMemo(() => {
-    const threshold = getDateThreshold(dateFilter);
     const keyword = search.trim().toLowerCase();
 
-    return reports
+    return (reports || [])
       .filter((report) => {
         if (status !== "all" && report.status !== status) return false;
-        if (threshold && getReportTimestamp(report) < threshold) return false;
+        if (reportCategory !== "all" && report.category !== reportCategory) return false;
+
         if (!keyword) return true;
 
-        const searchableText = `${report.category} ${report.description} ${report.location} ${report.placeName}`.toLowerCase();
+        const searchableText = [
+          report.aiTitle,
+          report.summary,
+          report.description,
+          report.placeName,
+          report.location,
+          report.category
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
         return searchableText.includes(keyword);
       })
       .sort((a, b) => getReportTimestamp(b) - getReportTimestamp(a));
-  }, [reports, search, status, dateFilter]);
+  }, [reportCategory, reports, search, status]);
 
   const filteredGeoAsrItems = useMemo(() => {
     const keyword = search.trim().toLowerCase();
 
     return allGeoAsrItems.filter((item) => {
-      if (category !== "all" && item.__source !== category) return false;
-      if (!sources[item.__source]) return false;
+      if (objectSource !== "all" && item.__source !== objectSource) return false;
       if (!keyword) return true;
 
       const text = `${item.obekt_nomi || ""} ${item.viloyat || ""} ${item.tuman || ""}`.toLowerCase();
       return text.includes(keyword);
     });
-  }, [allGeoAsrItems, search, sources, category]);
+  }, [allGeoAsrItems, objectSource, search]);
 
-  const sourceStats = useMemo(() => {
-    const counts = {
-      reports: filteredReports.length,
-      maktab44: 0,
-      bogcha: 0,
-      ssv: 0
-    };
-
-    filteredGeoAsrItems.forEach((item) => {
-      if (counts[item.__source] !== undefined) {
-        counts[item.__source] += 1;
-      }
-    });
-
-    return counts;
-  }, [filteredReports, filteredGeoAsrItems]);
-
-  const repeatedSignals = useMemo(() => {
+  const repeatedReportIds = useMemo(() => {
     const signalCounts = new Map();
 
     filteredReports.forEach((report) => {
@@ -135,234 +173,87 @@ export default function DashboardPage({
       signalCounts.set(key, (signalCounts.get(key) || 0) + 1);
     });
 
-    const repeatedReportsCount = filteredReports.filter((report) => (signalCounts.get(getReportSignalKey(report)) || 0) > 1).length;
-    const repeatedClusters = [...signalCounts.values()].filter((count) => count > 1).length;
+    return new Set(
+      filteredReports
+        .filter((report) => (signalCounts.get(getReportSignalKey(report)) || 0) > 1)
+        .map((report) => String(report.id))
+    );
+  }, [filteredReports]);
+
+  const kpis = useMemo(() => {
+    const resolvedOrVerified = filteredReports.filter(
+      (report) => report.status === "Verified" || report.status === "Resolved"
+    ).length;
 
     return {
-      repeatedReportsCount,
-      repeatedClusters
+      publicReports: filteredReports.length,
+      repeatedIssues: repeatedReportIds.size,
+      resolvedOrVerified
     };
-  }, [filteredReports]);
+  }, [filteredReports, repeatedReportIds.size]);
 
-  const communityConfirmations = useMemo(() => {
-    return filteredReports.reduce((total, report) => {
-      const explicit = Number(report.confirmationsCount);
-      if (Number.isFinite(explicit) && explicit > 0) return total + explicit;
-      return total + (report.status === "Resolved" ? 4 : report.status === "Verified" ? 3 : 1);
-    }, 0);
-  }, [filteredReports]);
+  const attentionIssues = useMemo(() => {
+    const ranked = [...filteredReports].sort((left, right) => sortAttentionIssues(left, right, repeatedReportIds));
+    return showAll ? ranked : ranked.slice(0, 5);
+  }, [filteredReports, repeatedReportIds, showAll]);
 
-  const objectLinkedReports = useMemo(() => {
-    return filteredReports.filter((report) => report.placeName).slice(0, 4);
-  }, [filteredReports]);
-
-  const statusTimeline = useMemo(() => {
-    const counts = STATUS_TIMELINE_ORDER.reduce((acc, statusKey) => {
-      acc[statusKey] = filteredReports.filter((report) => report.status === statusKey).length;
-      return acc;
-    }, {});
-
-    return {
-      counts,
-      total: filteredReports.length || 1
-    };
-  }, [filteredReports]);
-
-  const priorityCards = useMemo(() => {
-    return [...filteredReports]
-      .sort((left, right) => {
-        const leftImpact = Number(left.impact_score);
-        const rightImpact = Number(right.impact_score);
-
-        if (Number.isFinite(rightImpact) || Number.isFinite(leftImpact)) {
-          if (!Number.isFinite(leftImpact)) return 1;
-          if (!Number.isFinite(rightImpact)) return -1;
-          if (rightImpact !== leftImpact) return rightImpact - leftImpact;
-        }
-
-        const severityDiff = severityWeight(right.severity) - severityWeight(left.severity);
-        if (severityDiff !== 0) return severityDiff;
-
-        return getReportTimestamp(right) - getReportTimestamp(left);
-      })
-      .slice(0, 3);
-  }, [filteredReports]);
-
-  const topContributors = useMemo(() => {
-    const contributors = new Map();
-
-    reports.forEach((report) => {
-      const key = report.userId ?? report.reporterName;
-      const currentEntry = contributors.get(key) || {
-        userId: report.userId,
-        reporterName: report.reporterName || t("common.telegramUser"),
-        reportsCount: 0,
-        reputationPoints: 0,
-        isCurrentUser: report.userId === user.id
-      };
-
-      currentEntry.reporterName = report.userId === user.id ? getDisplayName(user) : currentEntry.reporterName;
-      currentEntry.reportsCount += 1;
-      currentEntry.reputationPoints += report.xpAwarded || calculateXP(report);
-      currentEntry.isCurrentUser = currentEntry.isCurrentUser || report.userId === user.id;
-
-      contributors.set(key, currentEntry);
+  const attentionObjects = useMemo(() => {
+    const index = buildObjectIndex(filteredReports);
+    const ranked = Object.values(index).sort((left, right) => {
+      if (right.unresolvedCount !== left.unresolvedCount) return right.unresolvedCount - left.unresolvedCount;
+      if (right.repeatedIssueCount !== left.repeatedIssueCount) return right.repeatedIssueCount - left.repeatedIssueCount;
+      return (right.reports?.length || 0) - (left.reports?.length || 0);
     });
 
-    if (contributors.has(user.id)) {
-      const currentUserEntry = contributors.get(user.id);
-      currentUserEntry.reputationPoints = Math.max(currentUserEntry.reputationPoints, reputationPoints);
-      currentUserEntry.reporterName = getDisplayName(user);
-      currentUserEntry.isCurrentUser = true;
-    } else {
-      contributors.set(user.id, {
-        userId: user.id,
-        reporterName: getDisplayName(user),
-        reportsCount: 0,
-        reputationPoints,
-        isCurrentUser: true
-      });
-    }
+    return showAll ? ranked : ranked.slice(0, 5);
+  }, [filteredReports, showAll]);
 
-    const rankedContributors = [...contributors.values()].sort((a, b) => {
-      if (b.reputationPoints !== a.reputationPoints) return b.reputationPoints - a.reputationPoints;
-      return b.reportsCount - a.reportsCount;
-    });
-
-    let topThree = rankedContributors.slice(0, 3);
-    if (!topThree.some((entry) => entry.userId === user.id)) {
-      topThree = [...topThree.slice(0, 2), contributors.get(user.id)];
-    }
-
-    return topThree
-      .filter(Boolean)
-      .sort((a, b) => {
-        if (b.reputationPoints !== a.reputationPoints) return b.reputationPoints - a.reputationPoints;
-        return b.reportsCount - a.reportsCount;
-      })
-      .slice(0, 3);
-  }, [reports, reputationPoints, t, user]);
-
-  const transparencyBlocks = useMemo(() => {
-    return [
-      {
-        title: "Needs human review",
-        value: filteredReports.filter((report) => REVIEW_STATUSES.has(report.status)).length,
-        tone: "warning",
-        copy: "New and under-review reports remain visible for public oversight."
-      },
-      {
-        title: "Community confirmations",
-        value: communityConfirmations,
-        tone: "neutral",
-        copy: "Residents confirm location and issue validity before escalation."
-      },
-      {
-        title: "Repeated issue clusters",
-        value: repeatedSignals.repeatedClusters,
-        tone: "danger",
-        copy: "Repeated signals highlight unresolved infrastructure pressure points."
-      },
-      {
-        title: "Resolved (30 days)",
-        value: filteredReports.filter((report) => report.status === "Resolved" && getReportTimestamp(report) >= Date.now() - 30 * 24 * 60 * 60 * 1000)
-          .length,
-        tone: "success",
-        copy: "Resolved records remain open to strengthen institutional accountability."
-      }
-    ];
-  }, [communityConfirmations, filteredReports, repeatedSignals.repeatedClusters]);
-
-  const toggleSource = (key) => {
-    setSources((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
+  const hasIssues = attentionIssues.length > 0;
+  const hasObjects = attentionObjects.length > 0;
 
   return (
     <section className="tab-page">
       <header className="page-header civic-header">
-        <p className="civic-eyebrow">Public-service civic-tech platform</p>
+        <p className="civic-eyebrow">Public overview</p>
         <h1>Real Holat Pulse</h1>
-        <p>Map-driven oversight for schools, clinics, drinking water, and internal roads across Uzbekistan.</p>
+        <p>See where issues are happening, what repeats, and where attention is needed now.</p>
       </header>
 
-      <section className="panel dashboard-hero">
-        <div>
-          <p className="hero-kicker">Public Transparency Layer</p>
-          <h2>Community reports with accountable status flow</h2>
-          <p>
-            Every issue remains public with object-linked context, repeated issue signals, and human review markers.
-          </p>
-        </div>
-        <div className="hero-metrics">
-          <article>
-            <span>Public reports</span>
-            <strong>{filteredReports.length}</strong>
+      <OnboardingAssistant currentTab="dashboard" />
+
+      <section className="panel">
+        <div className="trust-metrics">
+          <article className="trust-card">
+            <span className="stat-label">Public reports</span>
+            <strong>{kpis.publicReports}</strong>
           </article>
-          <article>
-            <span>Mapped objects</span>
-            <strong>{filteredGeoAsrItems.length}</strong>
+          <article className="trust-card">
+            <span className="stat-label">Repeated issues</span>
+            <strong>{kpis.repeatedIssues}</strong>
           </article>
-          <article>
-            <span>Repeated reports</span>
-            <strong>{repeatedSignals.repeatedReportsCount}</strong>
+          <article className="trust-card">
+            <span className="stat-label">Verified / Resolved</span>
+            <strong>{kpis.resolvedOrVerified}</strong>
           </article>
         </div>
       </section>
-
-      <PublicMap
-        fullHeight
-        geoAsrData={geoAsrData}
-        geoAsrItems={filteredGeoAsrItems}
-        onReportEnriched={onReportEnriched}
-        reports={sources.reports ? filteredReports : []}
-      />
-
-      <section className="panel status-timeline-panel">
-        <div className="panel-title-row">
-          <div>
-            <h3>Status timeline</h3>
-            <p>Transparent progress from first signal to final resolution.</p>
-          </div>
-        </div>
-        <div className="status-timeline">
-          {STATUS_TIMELINE_ORDER.map((statusKey) => {
-            const count = statusTimeline.counts[statusKey] || 0;
-            const width = count ? Math.max(12, Math.round((count / statusTimeline.total) * 100)) : 0;
-            return (
-              <article key={statusKey} className={`timeline-step ${count ? "active" : ""}`}>
-                <div className="timeline-row">
-                  <span className={`status-badge ${statusKey === "Resolved" ? "resolved" : statusKey === "Verified" ? "verified" : statusKey === "Under Review" ? "review" : "new"}`}>
-                    {getStatusLabel(statusKey)}
-                  </span>
-                  <strong>{count}</strong>
-                </div>
-                <div className="timeline-track">
-                  <div className="timeline-fill" style={{ width: `${width}%` }} />
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-
-      <StatsBar reports={reports} />
 
       <div className="panel filter-panel">
         <input
           type="search"
           placeholder={t("dashboard.searchPlaceholder")}
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(event) => setSearch(event.target.value)}
         />
 
         <div className="filter-grid">
           <label>
-            {t("dashboard.apiEndpoint")}
-            <select value={category} onChange={(e) => setCategory(e.target.value)}>
+            Category
+            <select value={reportCategory} onChange={(event) => setReportCategory(event.target.value)}>
               <option value="all">{t("common.all")}</option>
-              {ENDPOINT_CATEGORY_OPTIONS.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {getSourceLabel(item.value)}
+              {reportCategories.map((categoryValue) => (
+                <option key={categoryValue} value={categoryValue}>
+                  {categoryValue}
                 </option>
               ))}
             </select>
@@ -370,205 +261,143 @@ export default function DashboardPage({
 
           <label>
             {t("dashboard.status")}
-            <select value={status} onChange={(e) => setStatus(e.target.value)}>
+            <select value={status} onChange={(event) => setStatus(event.target.value)}>
               <option value="all">{t("common.all")}</option>
-              {STATUS_OPTIONS.map((item) => (
-                <option key={item} value={item}>
-                  {getStatusLabel(item)}
+              {STATUS_OPTIONS.map((statusValue) => (
+                <option key={statusValue} value={statusValue}>
+                  {getStatusLabel(statusValue)}
                 </option>
               ))}
             </select>
           </label>
 
           <label>
-            {t("dashboard.date")}
-            <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)}>
-              {DATE_FILTERS.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.value === "all"
-                    ? t("common.allTime")
-                    : item.value === "today"
-                      ? t("common.today")
-                      : item.value === "7d"
-                        ? t("common.last7Days")
-                        : t("common.last30Days")}
+            Object source
+            <select value={objectSource} onChange={(event) => setObjectSource(event.target.value)}>
+              {SOURCE_OPTIONS.map((sourceValue) => (
+                <option key={sourceValue} value={sourceValue}>
+                  {sourceValue === "all" ? t("common.all") : sourceValue}
                 </option>
               ))}
             </select>
           </label>
         </div>
 
-        <div className="source-filter-row" aria-label={t("dashboard.sourceFilters")}>
-          <button
-            type="button"
-            className={`source-chip ${sources.reports ? "active" : ""}`}
-            onClick={() => toggleSource("reports")}
-          >
-            {getSourceLabel("reports")} {sourceStats.reports}
-          </button>
-          <button
-            type="button"
-            className={`source-chip ${sources.maktab44 ? "active" : ""}`}
-            onClick={() => toggleSource("maktab44")}
-          >
-            {getSourceLabel("maktab44")} {sourceStats.maktab44}
-          </button>
-          <button
-            type="button"
-            className={`source-chip ${sources.bogcha ? "active" : ""}`}
-            onClick={() => toggleSource("bogcha")}
-          >
-            {getSourceLabel("bogcha")} {sourceStats.bogcha}
-          </button>
-          <button
-            type="button"
-            className={`source-chip ${sources.ssv ? "active" : ""}`}
-            onClick={() => toggleSource("ssv")}
-          >
-            {getSourceLabel("ssv")} {sourceStats.ssv}
-          </button>
-        </div>
-
         {geoAsrLoading ? <p className="map-hint">Loading public object registry...</p> : null}
         {geoAsrError ? <p className="error-text">{geoAsrError}</p> : null}
       </div>
 
-      <section className="panel civic-insight-panel">
-        <div className="civic-insight-grid">
-          <article className="civic-insight-card warning">
-            <span>Needs human review</span>
-            <strong>{filteredReports.filter((report) => REVIEW_STATUSES.has(report.status)).length}</strong>
-            <p>Publicly visible until operators complete verification.</p>
-          </article>
-          <article className="civic-insight-card neutral">
-            <span>Community confirmations</span>
-            <strong>{communityConfirmations}</strong>
-            <p>Citizen confirmations help validate location and urgency.</p>
-          </article>
-          <article className="civic-insight-card danger">
-            <span>Repeated issue indicators</span>
-            <strong>{repeatedSignals.repeatedReportsCount}</strong>
-            <p>Recurring reports flag unresolved pressure points in services.</p>
-          </article>
-        </div>
-      </section>
+      <PublicMap
+        fullHeight
+        geoAsrData={geoAsrData}
+        geoAsrItems={filteredGeoAsrItems}
+        onReportEnriched={onReportEnriched}
+        reports={filteredReports}
+      />
 
-      <section className="panel priority-section">
+      <section className="panel">
         <div className="panel-title-row">
           <div>
-            <h3>Priority explanation cards</h3>
-            <p>Short explainable highlights for triage and civic oversight.</p>
+            <h3>{focusMode === "issues" ? "Top issues needing attention" : "Top objects needing attention"}</h3>
+            <p>
+              {focusMode === "issues"
+                ? "Short, actionable list for quick review and follow-up."
+                : "Objects with unresolved or repeated issue pressure."}
+            </p>
+          </div>
+          <div className="source-filter-row">
+            <button
+              type="button"
+              className={`source-chip ${focusMode === "issues" ? "active" : ""}`}
+              onClick={() => {
+                setFocusMode("issues");
+                setShowAll(false);
+              }}
+            >
+              Issues
+            </button>
+            <button
+              type="button"
+              className={`source-chip ${focusMode === "objects" ? "active" : ""}`}
+              onClick={() => {
+                setFocusMode("objects");
+                setShowAll(false);
+              }}
+            >
+              Objects
+            </button>
           </div>
         </div>
-        <div className="priority-grid">
-          {priorityCards.length ? (
-            priorityCards.map((report) => {
-              const severity = report.severity || "default";
-              const impact = Number(report.impact_score);
+
+        {focusMode === "issues" ? (
+          hasIssues ? (
+            <div className="object-link-grid">
+              {attentionIssues.map((report) => {
+                const confirmations = Number(report.confirmationsCount) || 0;
+                const isRepeatedIssue = repeatedReportIds.has(String(report.id));
+                const displayTitle = shortText(report.aiTitle || report.summary || report.description || "Issue report", 64);
+
+                return (
+                  <article key={report.id} className="object-link-card">
+                    <div className="object-link-footer">
+                      <span className={`status-badge ${statusToTone(report.status)}`}>{getStatusLabel(report.status)}</span>
+                      <span>{getPlaceLabel(report)}</span>
+                    </div>
+                    <strong>{displayTitle}</strong>
+                    <p>{getPriorityReason(report, isRepeatedIssue)}</p>
+                    <div className="object-link-footer">
+                      <span>{confirmations > 0 ? `${confirmations} confirmations` : "No confirmations yet"}</span>
+                      <button
+                        type="button"
+                        className="secondary-btn small-action"
+                        onClick={() => onOpenIssueDetail?.(report.id)}
+                      >
+                        Open details
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="panel empty-state">No issues match current filters.</div>
+          )
+        ) : hasObjects ? (
+          <div className="object-link-grid">
+            {attentionObjects.map((object) => {
+              const leadReport = object.reports?.[0];
+              const openObject = () => {
+                if (leadReport?.id) onOpenObjectDetail?.(leadReport.id);
+              };
+
               return (
-                <article key={report.id} className={`priority-card ${severity}`}>
-                  <div className="priority-card-head">
-                    <span className={`severity-dot ${severity}`} />
-                    <strong>{shortText(report.summary || report.description || "Issue report", 64)}</strong>
-                  </div>
-                  <p>{shortText(report.context || "AI keeps this card in review mode and asks for human validation.", 120)}</p>
-                  <div className="priority-meta">
-                    <span>{shortText(report.location, 28)}</span>
-                    <span>{Number.isFinite(impact) ? `Impact ${impact.toFixed(1)} / 10` : "Needs human review"}</span>
+                <article key={object.key} className="object-link-card">
+                  <span className="object-link-type">{shortText(object.objectType || "public object", 26)}</span>
+                  <strong>{shortText(object.name, 54)}</strong>
+                  <p>Unresolved: {object.unresolvedCount} - Repeated categories: {object.repeatedIssueCount}</p>
+                  <div className="object-link-footer">
+                    <span>{(object.reports || []).length} linked issues</span>
+                    <button type="button" className="secondary-btn small-action" onClick={openObject}>
+                      Open object
+                    </button>
                   </div>
                 </article>
               );
-            })
-          ) : (
-            <div className="panel empty-state">Priority cards appear as soon as reports are enriched.</div>
-          )}
-        </div>
-      </section>
-
-      <section className="panel transparency-section">
-        <div className="panel-title-row">
-          <div>
-            <h3>Public transparency metrics</h3>
-            <p>Short civic signals designed for residents, journalists, and service operators.</p>
+            })}
           </div>
-        </div>
-        <div className="transparency-grid">
-          {transparencyBlocks.map((item) => (
-            <article key={item.title} className={`transparency-card ${item.tone}`}>
-              <span>{item.title}</span>
-              <strong>{item.value}</strong>
-              <p>{item.copy}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel object-linked-section">
-        <div className="panel-title-row">
-          <div>
-            <h3>Object-linked report cards</h3>
-            <p>Issue cards anchored to schools, clinics, water nodes, and road segments.</p>
-          </div>
-        </div>
-        <div className="object-link-grid">
-          {objectLinkedReports.length ? (
-            objectLinkedReports.map((report) => (
-              <article key={report.id} className="object-link-card">
-                <span className="object-link-type">{shortText(report.category, 26)}</span>
-                <strong>{shortText(report.placeName || "Unnamed public object", 46)}</strong>
-                <p>{shortText(report.summary || report.description, 92)}</p>
-                <div className="object-link-footer">
-                  <span className={`status-badge ${report.status === "Resolved" ? "resolved" : report.status === "Verified" ? "verified" : report.status === "Under Review" ? "review" : "new"}`}>
-                    {getStatusLabel(report.status)}
-                  </span>
-                  <span>{shortText(report.location, 26)}</span>
-                </div>
-              </article>
-            ))
-          ) : (
-            <div className="panel empty-state">No object-linked reports under current filters.</div>
-          )}
-        </div>
-      </section>
-
-      <section className="panel leaderboard-panel" aria-label={t("dashboard.topContributors")}>
-        <div className="panel-title-row">
-          <div>
-            <h3>{t("dashboard.topContributors")}</h3>
-            <p>{t("dashboard.contributorsSubtitle")}</p>
-          </div>
-        </div>
-
-        <div className="leaderboard-row">
-          {topContributors.map((contributor, index) => (
-            <article
-              key={contributor.userId || contributor.reporterName}
-              className={`leader-card ${contributor.isCurrentUser ? "is-current" : ""}`}
-            >
-              <span className="leader-rank">#{index + 1}</span>
-              <div className="leader-avatar">{getContributorInitials(contributor.reporterName)}</div>
-              <strong>{contributor.isCurrentUser ? t("common.you") : contributor.reporterName}</strong>
-              <span>{contributor.reputationPoints} {t("common.pointsShort")}</span>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="report-list" aria-label={t("common.reports")}>
-        {filteredReports.length ? (
-          filteredReports.map((report) => (
-            <ReportCard
-              key={report.id}
-              allReports={reports}
-              currentUserId={user.id}
-              onAddEvidence={onAddEvidence}
-              onConfirmReport={onConfirmReport}
-              report={report}
-            />
-          ))
         ) : (
-          <div className="panel empty-state">{t("dashboard.noMatches")}</div>
+          <div className="panel empty-state">No objects match current filters.</div>
         )}
+
+        <div className="source-filter-row">
+          <button
+            type="button"
+            className="source-chip active"
+            onClick={() => setShowAll((prev) => !prev)}
+          >
+            {showAll ? (focusMode === "issues" ? "Show top issues" : "Show top objects") : focusMode === "issues" ? "Open all issues" : "Open all objects"}
+          </button>
+        </div>
       </section>
     </section>
   );

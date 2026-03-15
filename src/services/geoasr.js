@@ -1,22 +1,17 @@
 function getApiConfig() {
-  const useProxy = import.meta.env.DEV || import.meta.env.VITE_GEOASR_USE_PROXY === "true";
-  const token = import.meta.env.VITE_GEOASR_BEARER_TOKEN || "";
-
   return {
-    useProxy,
-    token,
     endpoints: [
       {
         key: "maktab44",
-        url: useProxy ? "/geoasr/maktab44" : import.meta.env.VITE_GEOASR_MAKTAB44_URL || "https://duasr.uz/api4/maktab44"
+        url: "/api/geoasr/maktab44"
       },
       {
         key: "bogcha",
-        url: useProxy ? "/geoasr/bogcha" : import.meta.env.VITE_GEOASR_BOGCHA_URL || "https://duasr.uz/api4/bogcha"
+        url: "/api/geoasr/bogcha"
       },
       {
         key: "ssv",
-        url: useProxy ? "/geoasr/ssv" : import.meta.env.VITE_GEOASR_SSV_URL || "https://duasr.uz/api4/ssv"
+        url: "/api/geoasr/ssv"
       }
     ]
   };
@@ -124,34 +119,32 @@ export function resolveGeoAsrLatLng(item) {
 }
 
 export async function fetchGeoAsrData() {
-  const { token, endpoints, useProxy } = getApiConfig();
-  if (!useProxy && !token) {
-    return {
-      enabled: false,
-      sources: [],
-      items: [],
-      error: "Missing VITE_GEOASR_BEARER_TOKEN"
-    };
-  }
-
-  const headers = useProxy
-    ? {}
-    : {
-        Authorization: `Bearer ${token}`
-      };
+  const { endpoints } = getApiConfig();
+  const headers = {};
 
   const results = await Promise.all(
     endpoints.map(async (source) => {
       try {
         const response = await fetchWithRetry(source.url, { headers }, 2);
         if (!response.ok) {
+          let errorText = `${source.key}: ${response.status}`;
+
+          try {
+            const payload = await response.json();
+            if (payload?.error) {
+              errorText = `${source.key}: ${payload.error}`;
+            }
+          } catch {
+            // ignore invalid JSON responses
+          }
+
           return {
             source: source.key,
             ok: false,
             status: response.status,
             count: 0,
             records: [],
-            error: `${source.key}: ${response.status}`
+            error: errorText
           };
         }
 
@@ -195,8 +188,8 @@ export async function fetchGeoAsrData() {
   return {
     enabled: true,
     apiKeyInfo: {
-      configured: Boolean(token),
-      masked: token ? maskToken(token) : useProxy ? "proxy-mode" : ""
+      configured: !errors.some((entry) => String(entry).includes("Missing GEOASR_BEARER_TOKEN")),
+      masked: "server-side-only"
     },
     sources,
     items,

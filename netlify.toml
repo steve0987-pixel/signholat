@@ -18,6 +18,21 @@
   status = 200
 
 [[redirects]]
+  from = "/api/geoasr/maktab44"
+  to = "/.netlify/functions/geoasr-maktab44"
+  status = 200
+
+[[redirects]]
+  from = "/api/geoasr/bogcha"
+  to = "/.netlify/functions/geoasr-bogcha"
+  status = 200
+
+[[redirects]]
+  from = "/api/geoasr/ssv"
+  to = "/.netlify/functions/geoasr-ssv"
+  status = 200
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200

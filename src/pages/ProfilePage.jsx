@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import ReportCard from "../components/ReportCard";
+import { STATUS_FLOW } from "../constants/statusLifecycle";
 import { useI18n } from "../i18n/LanguageProvider";
 import { computeBadges } from "../utils/badges";
 import { getRank, getNextRank } from "../utils/ranks";
@@ -19,9 +20,10 @@ export default function ProfilePage({
   reputationPoints,
   participationStats,
   lastXpEvent,
-  onAcknowledgeXpEvent
+  onAcknowledgeXpEvent,
+  onOpenIssueDetail
 }) {
-  const { getBadgeLabel, getRankLabel, t } = useI18n();
+  const { getBadgeLabel, getRankLabel, getStatusLabel, t } = useI18n();
   const userReports = useMemo(() => {
     return reports
       .filter((report) => report.userId === user.id)
@@ -81,6 +83,12 @@ export default function ProfilePage({
   }, [safeParticipationStats.confirmationsThisWeek, safeParticipationStats.evidenceThisWeek, safeParticipationStats.repeatedParticipationsThisWeek]);
 
   const completedMissionCount = useMemo(() => missions.filter((mission) => mission.progress >= mission.goal).length, [missions]);
+  const statusTimeline = useMemo(() => {
+    return STATUS_FLOW.map((statusKey) => ({
+      statusKey,
+      count: userReports.filter((report) => report.status === statusKey).length
+    }));
+  }, [userReports]);
   const contributionScore = useMemo(() => {
     return (
       safeParticipationStats.confirmationsTotal * 3 +
@@ -278,10 +286,40 @@ export default function ProfilePage({
         </p>
       </section>
 
+      <section className="panel status-timeline-panel">
+        <div className="panel-title-row">
+          <div>
+            <h3>Status lifecycle in your reports</h3>
+            <p>Track movement from first submission to resolution.</p>
+          </div>
+        </div>
+        <div className="status-timeline">
+          {statusTimeline.map((item) => (
+            <article key={item.statusKey} className={`timeline-step ${item.count ? "active" : ""}`}>
+              <div className="timeline-row">
+                <span className="status-badge">{getStatusLabel(item.statusKey)}</span>
+                <strong>{item.count}</strong>
+              </div>
+              <div className="timeline-track">
+                <div className="timeline-fill" style={{ width: `${item.count ? Math.min(100, 20 + item.count * 18) : 0}%` }} />
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
       <section className="report-list" aria-label={t("profile.yourReports")}>
         <h3 className="list-title">{t("profile.yourReports")}</h3>
         {userReports.length ? (
-          userReports.map((report) => <ReportCard key={report.id} allReports={reports} report={report} compact />)
+          userReports.map((report) => (
+            <ReportCard
+              key={report.id}
+              allReports={reports}
+              report={report}
+              compact
+              onOpenIssueDetail={onOpenIssueDetail}
+            />
+          ))
         ) : (
           <div className="panel empty-state">{t("profile.noReports")}</div>
         )}

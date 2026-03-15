@@ -1,11 +1,10 @@
 import React, { useMemo, useState } from "react";
 
 import { useI18n } from "../i18n/LanguageProvider";
+import { getNextStatus, STATUS_FLOW } from "../constants/statusLifecycle";
 import { requestPriorityExplanation } from "../services/ai";
 import { calculateDistanceMeters, parseReportLatLng } from "../utils/enrichReport";
 import { formatDateTime, shortText, statusToTone } from "../utils/reportUtils";
-
-const STATUS_FLOW = ["New", "Under Review", "Verified", "Resolved"];
 
 function inferLinkedObjectType(report) {
   const text = `${report.placeName || ""} ${report.category || ""}`.toLowerCase();
@@ -54,7 +53,10 @@ export default function ReportCard({
   compact = false,
   currentUserId = null,
   onConfirmReport,
-  onAddEvidence
+  onAddEvidence,
+  onOpenIssueDetail,
+  onOpenObjectDetail,
+  onAdvanceStatus
 }) {
   const { getCategoryLabel, getStatusLabel, language, locale } = useI18n();
   const mediaType = report.mediaType || "image";
@@ -77,6 +79,7 @@ export default function ReportCard({
   const userEvidenceCount = Number(report.userParticipation?.userEvidenceCount) || 0;
   const isRepeatedIssue = report.isRepeatedIssue || repeatedIssueCount > 0;
   const repeatedParticipation = isRepeatedIssue && (hasConfirmed || userEvidenceCount > 0);
+  const nextStatus = getNextStatus(report.status);
 
   const handleToggleDetails = async () => {
     const nextOpen = !detailsOpen;
@@ -104,17 +107,17 @@ export default function ReportCard({
     });
   };
 
-  const handleConfirmClick = () => {
+  const handleConfirmClick = async () => {
     if (typeof onConfirmReport !== "function") return;
-    const result = onConfirmReport(report.id);
+    const result = await onConfirmReport(report.id);
     if (result?.message) setParticipationMessage(result.message);
   };
 
-  const handleEvidenceSubmit = (event) => {
+  const handleEvidenceSubmit = async (event) => {
     event.preventDefault();
     if (typeof onAddEvidence !== "function") return;
 
-    const result = onAddEvidence(report.id, evidenceText);
+    const result = await onAddEvidence(report.id, evidenceText);
     if (result?.message) setParticipationMessage(result.message);
     if (result?.ok) {
       setEvidenceText("");
@@ -209,6 +212,36 @@ export default function ReportCard({
         ) : null}
 
         {!compact && participationMessage ? <p className="participation-message">{participationMessage}</p> : null}
+
+        {!compact && onOpenIssueDetail ? (
+          <button
+            type="button"
+            className="secondary-btn small-action"
+            onClick={() => onOpenIssueDetail(report.id)}
+          >
+            Open issue detail
+          </button>
+        ) : null}
+
+        {!compact && report.placeName && onOpenObjectDetail ? (
+          <button
+            type="button"
+            className="secondary-btn small-action"
+            onClick={() => onOpenObjectDetail(report.id)}
+          >
+            Open linked object
+          </button>
+        ) : null}
+
+        {!compact && onAdvanceStatus && nextStatus ? (
+          <button
+            type="button"
+            className="secondary-btn small-action"
+            onClick={() => onAdvanceStatus(report.id, nextStatus)}
+          >
+            Move to "{getStatusLabel(nextStatus)}"
+          </button>
+        ) : null}
 
         {!compact ? (
           <div className="status-mini-timeline" aria-label="Status timeline">

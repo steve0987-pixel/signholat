@@ -11,7 +11,7 @@ export const sampleReports = [
     image:
       "https://images.unsplash.com/photo-1531190867646-8c78f9d6f6aa?auto=format&fit=crop&w=900&q=80",
     submittedAt: new Date(now - 1000 * 60 * 45).toISOString(),
-    status: "New",
+    status: "Submitted",
     userId: 11,
     reporterName: "@adilbek"
   },
@@ -39,7 +39,7 @@ export const sampleReports = [
     image:
       "https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=900&q=80",
     submittedAt: new Date(now - 1000 * 60 * 60 * 26).toISOString(),
-    status: "Verified",
+    status: "In Progress",
     userId: 22,
     reporterName: "@sardor"
   },
@@ -67,7 +67,7 @@ export const sampleReports = [
     image:
       "https://images.unsplash.com/photo-1583947215259-38e31be8751f?auto=format&fit=crop&w=900&q=80",
     submittedAt: new Date(now - 1000 * 60 * 60 * 72).toISOString(),
-    status: "New",
+    status: "Submitted",
     userId: 14,
     reporterName: "@javlon"
   }

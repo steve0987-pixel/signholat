@@ -14,7 +14,7 @@ export default function GeoAsrPanel({ loading, geoAsr }) {
     return (
       <section className="panel geoasr-panel">
         <h3>GEOASR Registry</h3>
-        <p className="map-hint">Add VITE_GEOASR_BEARER_TOKEN in .env to enable organizer data.</p>
+        <p className="map-hint">Configure GEOASR_BEARER_TOKEN on server to enable organizer data.</p>
       </section>
     );
   }

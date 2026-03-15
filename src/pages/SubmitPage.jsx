@@ -1,8 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
+import LocationPickerMap from "../components/LocationPickerMap";
 import { CATEGORIES } from "../constants/options";
 import { useI18n } from "../i18n/LanguageProvider";
 import { requestDuplicateCheck, requestTitleSummary } from "../services/ai";
-import { findNearbyObjects, findNearbyReports, parseReportLatLng } from "../utils/enrichReport";
+import { findNearbyObjects, findNearbyReports } from "../utils/enrichReport";
+import {
+  extractCoordinatesFromLocationInput,
+  normalizeLocationInput,
+  reverseGeocodePlaceName,
+  suggestPlaceNameFromLocation
+} from "../utils/locationAssist";
 
 function buildPreviewKey({ category, description, placeName }, language) {
   return [language, category, description.trim(), placeName.trim()].join("|");
@@ -30,7 +37,7 @@ function summarizeNearbyReports(candidateReports = []) {
     summary: report.summary || "",
     description: report.description || "",
     location: report.location || "",
-    status: report.status || "New",
+    status: report.status || "Submitted",
     distance: report.distance ?? null
   }));
 }
@@ -58,7 +65,43 @@ function findDuplicateCandidates(payload, parsedLocation, reports = []) {
     .slice(0, 6);
 }
 
-export default function SubmitPage({ geoAsrData, onSubmit, reports = [] }) {
+function shouldShowClarifiedDescription(rawDescription, clarifiedDescription) {
+  const raw = String(rawDescription || "").trim();
+  const clarified = String(clarifiedDescription || "").trim();
+  if (!raw || !clarified) return false;
+  if (raw === clarified) return false;
+
+  const normalizeForCompare = (value) =>
+    String(value || "")
+      .toLowerCase()
+      .replace(/[.,!?;:()[\]{}"']/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (normalizeForCompare(raw) === normalizeForCompare(clarified)) return false;
+
+  return raw.length >= 24;
+}
+
+function getAiErrorLabel(errorCode) {
+  const code = String(errorCode || "");
+
+  switch (code) {
+    case "config_missing":
+      return "AI is in fallback mode: GROQ_API_KEY is missing on server.";
+    case "timeout":
+      return "AI timeout: server switched to fallback mode.";
+    case "request_failed":
+      return "AI request failed: fallback mode is active.";
+    case "network_error":
+    case "endpoint_unavailable":
+      return "AI endpoint is unavailable right now, using fallback mode.";
+    default:
+      return code ? `Fallback reason: ${code}` : "Fallback mode is active.";
+  }
+}
+
+export default function SubmitPage({ geoAsrData, onSubmit, onConfirmExistingIssue, reports = [] }) {
   const { getCategoryLabel, language, t } = useI18n();
   const [form, setForm] = useState({
     category: CATEGORIES[0],
@@ -74,6 +117,7 @@ export default function SubmitPage({ geoAsrData, onSubmit, reports = [] }) {
   const [locating, setLocating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [aiPreview, setAiPreview] = useState(null);
+  const [autoSuggestedPlaceName, setAutoSuggestedPlaceName] = useState("");
   const [duplicateState, setDuplicateState] = useState(null);
 
   useEffect(() => {
@@ -126,6 +170,74 @@ export default function SubmitPage({ geoAsrData, onSubmit, reports = [] }) {
       window.clearTimeout(timeoutId);
     };
   }, [form.category, form.description, form.placeName, language, previewKey]);
+
+  useEffect(() => {
+    const rawLocation = form.location.trim();
+    if (!rawLocation) return;
+    let cancelled = false;
+
+    const normalizedLocation = normalizeLocationInput(rawLocation);
+    const suggestedPlaceName = suggestPlaceNameFromLocation(normalizedLocation || rawLocation, geoAsrData);
+
+    setForm((prev) => {
+      let next = prev;
+
+      if (normalizedLocation && normalizedLocation !== prev.location) {
+        next = { ...next, location: normalizedLocation };
+      }
+
+      const currentPlace = prev.placeName.trim();
+      const canAutofillPlace = !currentPlace || currentPlace === autoSuggestedPlaceName;
+      if (suggestedPlaceName && canAutofillPlace && currentPlace !== suggestedPlaceName) {
+        next = next === prev ? { ...next } : next;
+        next.placeName = suggestedPlaceName;
+      }
+
+      return next;
+    });
+
+    if (suggestedPlaceName) {
+      setAutoSuggestedPlaceName(suggestedPlaceName);
+    } else if (autoSuggestedPlaceName) {
+      setAutoSuggestedPlaceName("");
+    }
+
+    if (suggestedPlaceName) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const coords = extractCoordinatesFromLocationInput(normalizedLocation || rawLocation);
+    if (!coords) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const timeoutId = window.setTimeout(async () => {
+      const reversePlaceName = await reverseGeocodePlaceName(coords.lat, coords.lng, language);
+      if (cancelled || !reversePlaceName) return;
+
+      setForm((prev) => {
+        const currentPlace = prev.placeName.trim();
+        const canAutofillPlace = !currentPlace || currentPlace === autoSuggestedPlaceName;
+        if (!canAutofillPlace || currentPlace === reversePlaceName) return prev;
+
+        return {
+          ...prev,
+          placeName: reversePlaceName
+        };
+      });
+
+      setAutoSuggestedPlaceName(reversePlaceName);
+    }, 600);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [autoSuggestedPlaceName, form.location, geoAsrData, language]);
 
   const updateField = (field, value) => {
     setDuplicateState(null);
@@ -184,6 +296,7 @@ export default function SubmitPage({ geoAsrData, onSubmit, reports = [] }) {
       mediaUrl: "",
       mediaType: "image"
     });
+    setAutoSuggestedPlaceName("");
     setAiPreview(null);
     setDuplicateState(null);
   };
@@ -207,7 +320,8 @@ export default function SubmitPage({ geoAsrData, onSubmit, reports = [] }) {
       mediaType: form.mediaType
     };
 
-    const parsedLocation = parseReportLatLng(payload.location);
+    const normalizedLocation = normalizeLocationInput(payload.location);
+    const parsedLocation = extractCoordinatesFromLocationInput(normalizedLocation || payload.location);
     const nearbyObjects = parsedLocation ? findNearbyObjects(parsedLocation.lat, parsedLocation.lng, geoAsrData) : [];
     const linkedObject = toLinkedObject(placeName, nearbyObjects);
     const preview =
@@ -225,6 +339,7 @@ export default function SubmitPage({ geoAsrData, onSubmit, reports = [] }) {
     return {
       payload: {
         ...payload,
+        location: normalizedLocation || payload.location,
         aiTitle: preview.aiTitle || "",
         summary: preview.summary || payload.description
       },
@@ -342,6 +457,20 @@ export default function SubmitPage({ geoAsrData, onSubmit, reports = [] }) {
               <>
                 <strong className="ai-assist-title">{aiPreview.aiTitle}</strong>
                 <p className="ai-assist-copy">{aiPreview.summary}</p>
+                {aiPreview?.fallbackUsed ? <p className="ai-assist-copy">{getAiErrorLabel(aiPreview.aiError)}</p> : null}
+                {shouldShowClarifiedDescription(form.description, aiPreview.clarifiedDescription) ? (
+                  <div className="ai-description-refine">
+                    <strong>Clear description</strong>
+                    <p>{aiPreview.clarifiedDescription}</p>
+                    <button
+                      type="button"
+                      className="secondary-btn small-action"
+                      onClick={() => updateField("description", aiPreview.clarifiedDescription)}
+                    >
+                      Use this description
+                    </button>
+                  </div>
+                ) : null}
               </>
             )}
           </div>
@@ -353,7 +482,13 @@ export default function SubmitPage({ geoAsrData, onSubmit, reports = [] }) {
             type="text"
             placeholder={t("submission.placeNamePlaceholder")}
             value={form.placeName}
-            onChange={(e) => updateField("placeName", e.target.value)}
+            onChange={(e) => {
+              const nextValue = e.target.value;
+              if (autoSuggestedPlaceName && nextValue.trim() !== autoSuggestedPlaceName) {
+                setAutoSuggestedPlaceName("");
+              }
+              updateField("placeName", nextValue);
+            }}
           />
         </label>
 
@@ -367,6 +502,16 @@ export default function SubmitPage({ geoAsrData, onSubmit, reports = [] }) {
           />
         </label>
 
+        <LocationPickerMap
+          locationValue={form.location}
+          onSelect={(lat, lng) => updateField("location", `${lat.toFixed(6)}, ${lng.toFixed(6)}`)}
+          disabled={submitting}
+        />
+
+        {autoSuggestedPlaceName ? (
+          <p className="map-hint">Object name was auto-detected from location: {autoSuggestedPlaceName}</p>
+        ) : null}
+
         {duplicateState?.duplicateResult ? (
           <div className="ai-duplicate-card" role="alert">
             <strong>Possible duplicate report nearby</strong>
@@ -379,6 +524,33 @@ export default function SubmitPage({ geoAsrData, onSubmit, reports = [] }) {
               <button type="button" className="secondary-btn" onClick={() => setDuplicateState(null)} disabled={submitting}>
                 Edit report
               </button>
+              {duplicateState.duplicateResult.matchedIssueId && onConfirmExistingIssue ? (
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  disabled={submitting}
+                  onClick={async () => {
+                    setSubmitting(true);
+                    setError("");
+
+                    try {
+                      const result = await onConfirmExistingIssue(duplicateState.duplicateResult.matchedIssueId);
+                      if (!result?.ok) {
+                        setError(result?.message || "Unable to confirm existing issue.");
+                        return;
+                      }
+
+                      setSuccessMessage("Existing issue confirmed. Thank you for community validation.");
+                      setDuplicateState(null);
+                      resetForm();
+                    } finally {
+                      setSubmitting(false);
+                    }
+                  }}
+                >
+                  Confirm existing issue
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="primary-btn"

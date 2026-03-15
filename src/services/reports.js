@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from "../lib/supabase";
+import { normalizeStatus } from "../constants/statusLifecycle";
 
 const REPORTS_TABLE = import.meta.env.VITE_SUPABASE_REPORTS_TABLE || "reports";
 const REPORT_MEDIA_BUCKET = import.meta.env.VITE_SUPABASE_REPORT_MEDIA_BUCKET || "report-media";
@@ -10,6 +11,16 @@ function normalizeUserId(value) {
 
 function sanitizeFileName(fileName = "upload") {
   return fileName.replace(/[^a-zA-Z0-9._-]+/g, "-");
+}
+
+function parseImpactScore(value) {
+  if (value === null || value === undefined || value === "") return null;
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed <= 0) return null;
+
+  return Math.max(0, Math.min(10, parsed));
 }
 
 function getStoredTimestamp(report) {
@@ -33,15 +44,14 @@ export function mapStoredReport(row = {}) {
     mediaType,
     createdAt,
     submittedAt: createdAt,
-    status: row.status || "New",
+    status: normalizeStatus(row.status || "Submitted"),
     userId: normalizeUserId(row.telegram_user_id ?? row.userId ?? row.created_by),
     reporterName: row.reporter_name || row.reporterName || "",
     aiTitle: row.ai_title || row.aiTitle || "",
     summary: row.summary || "",
     context: row.context || "",
     severity: row.severity || "",
-    impact_score:
-      row.impact_score === null || row.impact_score === undefined ? null : Number(row.impact_score),
+    impact_score: parseImpactScore(row.impact_score),
     xpAwarded: Number.isFinite(Number(row.xp_awarded ?? row.xpAwarded))
       ? Number(row.xp_awarded ?? row.xpAwarded)
       : 0
@@ -123,13 +133,12 @@ export async function createStoredReport({ report, mediaFile, user }) {
       place_name: report.placeName || "",
       media_url: remoteMediaUrl,
       media_type: report.mediaType || "image",
-      status: report.status || "New",
+      status: normalizeStatus(report.status || "Submitted"),
       created_at: getStoredTimestamp(report),
       summary: report.summary || null,
       context: report.context || null,
       severity: report.severity || null,
-      impact_score:
-        report.impact_score === null || report.impact_score === undefined ? null : Number(report.impact_score),
+      impact_score: parseImpactScore(report.impact_score),
       xp_awarded: Number.isFinite(Number(report.xpAwarded)) ? Number(report.xpAwarded) : 0
     };
 
@@ -155,10 +164,27 @@ export async function updateStoredReportEnrichment(reportId, enrichment) {
         summary: enrichment.summary || null,
         context: enrichment.context || null,
         severity: enrichment.severity || null,
-        impact_score:
-          enrichment.impact_score === null || enrichment.impact_score === undefined
-            ? null
-            : Number(enrichment.impact_score)
+        impact_score: parseImpactScore(enrichment.impact_score)
+      })
+      .eq("id", reportId);
+
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+export async function updateStoredReportStatus(reportId, status) {
+  if (!isSupabaseConfigured || !supabase || !reportId || !status) return false;
+
+  const hasSession = await ensureSupabaseSession();
+  if (!hasSession) return false;
+
+  try {
+    const { error } = await supabase
+      .from(REPORTS_TABLE)
+      .update({
+        status: normalizeStatus(status)
       })
       .eq("id", reportId);
 

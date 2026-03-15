@@ -6,7 +6,14 @@ export default function StatsBar({ reports }) {
   const total = reports.length;
   const verified = reports.filter((r) => r.status === "Verified").length;
   const resolved = reports.filter((r) => r.status === "Resolved").length;
-  const urgent = reports.filter((r) => ["Safety issue", "Construction issue"].includes(r.category)).length;
+  const urgent = reports.filter((r) => {
+    const severity = String(r.severity || "").toLowerCase();
+    if (["critical", "high"].includes(severity)) return true;
+
+    return ["Public safety", "Internal roads", "Drinking water supply", "Safety issue", "Construction issue"].includes(
+      r.category
+    );
+  }).length;
 
   return (
     <section className="stats-wrap" aria-label={t("stats.ariaLabel")}>

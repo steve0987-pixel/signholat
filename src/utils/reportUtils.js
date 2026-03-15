@@ -29,7 +29,10 @@ export function statusToTone(status) {
       return "verified";
     case "Resolved":
       return "resolved";
+    case "In Progress":
+      return "review";
     case "Under Review":
+    case "Submitted":
       return "review";
     default:
       return "new";

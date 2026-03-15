@@ -2,6 +2,24 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from "
 import { LOCALE_BY_LANGUAGE, STORAGE_LANGUAGE_KEY, SUPPORTED_LANGUAGES, translations } from "./translations";
 
 const LanguageContext = createContext(null);
+const CATEGORY_LABEL_OVERRIDES = {
+  ru: {
+    "School infrastructure": "Школьная инфраструктура",
+    "Clinic infrastructure": "Инфраструктура клиник",
+    "Drinking water supply": "Питьевое водоснабжение",
+    "Internal roads": "Внутренние дороги",
+    "Sanitation and waste": "Санитария и отходы",
+    "Street lighting": "Уличное освещение",
+    "Public safety": "Общественная безопасность"
+  }
+};
+
+const STATUS_LABEL_OVERRIDES = {
+  ru: {
+    Submitted: "Принято",
+    "In Progress": "В работе"
+  }
+};
 
 function normalizeLanguageCode(value) {
   const baseCode = String(value || "")
@@ -63,8 +81,8 @@ export function LanguageProvider({ children }) {
       languages: SUPPORTED_LANGUAGES,
       setLanguage: (nextLanguage) => setLanguage(normalizeLanguageCode(nextLanguage)),
       t,
-      getCategoryLabel: (category) => getMappedLabel("categories", category),
-      getStatusLabel: (status) => getMappedLabel("statuses", status),
+      getCategoryLabel: (category) => CATEGORY_LABEL_OVERRIDES[language]?.[category] || getMappedLabel("categories", category),
+      getStatusLabel: (status) => STATUS_LABEL_OVERRIDES[language]?.[status] || getMappedLabel("statuses", status),
       getSourceLabel: (source) => getMappedLabel("sources", source),
       getRankLabel: (rankId) => getMappedLabel("ranks", rankId),
       getBadgeLabel: (badgeId) => getMappedLabel("badges", badgeId)

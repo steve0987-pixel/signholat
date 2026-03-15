@@ -1,5 +1,6 @@
 import {
   buildFallbackDuplicateResult,
+  buildFallbackOnboardingAssistant,
   buildFallbackPriorityExplanation,
   buildFallbackTitleSummary
 } from "../../lib/ai/fallbacks.js";
@@ -15,13 +16,24 @@ async function postAi(pathname, payload, fallbackFactory) {
     });
 
     if (!response.ok) {
-      return fallbackFactory(payload);
+      return {
+        ...fallbackFactory(payload),
+        aiError: `http_${response.status}`
+      };
     }
 
     const data = await response.json();
-    return data && typeof data === "object" ? data : fallbackFactory(payload);
+    return data && typeof data === "object"
+      ? data
+      : {
+          ...fallbackFactory(payload),
+          aiError: "invalid_response"
+        };
   } catch {
-    return fallbackFactory(payload);
+    return {
+      ...fallbackFactory(payload),
+      aiError: "endpoint_unavailable"
+    };
   }
 }
 
@@ -35,4 +47,8 @@ export function requestTitleSummary(payload) {
 
 export function requestPriorityExplanation(payload) {
   return postAi("/api/ai/priority-explanation", payload, buildFallbackPriorityExplanation);
+}
+
+export function requestOnboardingAssistant(payload) {
+  return postAi("/api/ai/onboarding-assistant", payload, buildFallbackOnboardingAssistant);
 }

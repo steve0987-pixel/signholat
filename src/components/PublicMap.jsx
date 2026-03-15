@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { CircleMarker, MapContainer, Popup, TileLayer, useMap } from "react-leaflet";
+import { useI18n } from "../i18n/LanguageProvider";
+import { requestPriorityExplanation, requestTitleSummary } from "../services/ai";
 import { resolveGeoAsrLatLng } from "../services/geoasr";
 import { parseReportLatLng } from "../utils/enrichReport";
 import { shortText } from "../utils/reportUtils";
@@ -57,7 +59,7 @@ function formatRelativeTime(dateValue) {
 
   const diffMs = timestamp - Date.now();
   const diffMinutes = Math.round(diffMs / (1000 * 60));
-  const relative = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+  const relative = new Intl.RelativeTimeFormat("ru", { numeric: "auto" });
 
   if (Math.abs(diffMinutes) < 60) return relative.format(diffMinutes, "minute");
 
@@ -80,8 +82,36 @@ function getPopupSummary(report) {
 }
 
 function getImpactValue(report) {
-  const parsed = Number(report?.impact_score);
-  return Number.isFinite(parsed) ? parsed : null;
+  const raw = report?.impact_score;
+  if (raw === null || raw === undefined || raw === "") return null;
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed <= 0) return null;
+
+  return Math.max(0, Math.min(10, parsed));
+}
+
+function estimateImpactScore(report) {
+  let score = 3.4;
+  const severity = String(report?.severity || "").toLowerCase();
+  const confirmations = Number(report?.confirmationsCount) || 0;
+
+  if (severity === "critical") score += 3.4;
+  else if (severity === "high") score += 2.5;
+  else if (severity === "medium") score += 1.4;
+  else if (severity === "low") score += 0.7;
+
+  if (confirmations >= 5) score += 1.2;
+  else if (confirmations >= 3) score += 0.9;
+  else if (confirmations >= 2) score += 0.6;
+  else if (confirmations >= 1) score += 0.3;
+
+  if (report?.status === "Under Review") score += 0.4;
+  if (report?.status === "In Progress") score += 0.3;
+  if (report?.status === "Resolved") score -= 1.5;
+
+  return Math.max(1.0, Math.min(9.9, Number(score.toFixed(1))));
 }
 
 function getReportMetaLine(report) {
@@ -109,7 +139,9 @@ function getNearbyObjectPopupName(item) {
 }
 
 export default function PublicMap({ reports, geoAsrItems = [], geoAsrData, onReportEnriched, fullHeight = false }) {
+  const { language } = useI18n();
   const [mapInstance, setMapInstance] = useState(null);
+  const [popupAiState, setPopupAiState] = useState({});
 
   const reportMarkers = useMemo(() => {
     return (reports || [])
@@ -152,6 +184,50 @@ export default function PublicMap({ reports, geoAsrItems = [], geoAsrData, onRep
   }, [reportMarkers]);
 
   const tileConfig = getTileConfig();
+
+  const ensureReportEnrichment = async (report) => {
+    if (!report || !onReportEnriched) return;
+    if (report.summary && report.context) return;
+
+    setPopupAiState((prev) => ({
+      ...prev,
+      [report.id]: { loading: true }
+    }));
+
+    try {
+      const [titleSummary, priority] = await Promise.all([
+        requestTitleSummary({
+          language,
+          category: report.category,
+          description: report.description || "",
+          linkedObject: report.placeName ? { name: report.placeName } : null
+        }),
+        requestPriorityExplanation({
+          language,
+          category: report.category,
+          summary: report.summary || report.description || "",
+          severity: report.severity || "",
+          linkedObjectType: "",
+          repeatedIssueCount: 0,
+          confirmationsCount: Number(report.confirmationsCount) || 0,
+          statusAgeHours: 0
+        })
+      ]);
+
+      onReportEnriched(report.id, {
+        aiTitle: titleSummary.aiTitle || report.aiTitle || "",
+        summary: titleSummary.summary || report.summary || report.description,
+        context: report.context || priority.priorityExplanation || "",
+        severity: report.severity || "medium",
+        impact_score: getImpactValue(report) ?? estimateImpactScore(report)
+      });
+    } finally {
+      setPopupAiState((prev) => ({
+        ...prev,
+        [report.id]: { loading: false }
+      }));
+    }
+  };
 
   if (tileConfig.usesExternalKey && !import.meta.env.VITE_MAP_API_KEY) {
     return (
@@ -242,6 +318,9 @@ export default function PublicMap({ reports, geoAsrItems = [], geoAsrData, onRep
             <CircleMarker
               key={marker.id}
               center={marker.latLng}
+              eventHandlers={{
+                popupopen: () => ensureReportEnrichment(marker.report)
+              }}
               pathOptions={{
                 color: "white",
                 weight: 2,
@@ -256,6 +335,21 @@ export default function PublicMap({ reports, geoAsrItems = [], geoAsrData, onRep
                     <strong style={{ fontSize: "14px", lineHeight: 1.35 }}>{getPopupSummary(marker.report)}</strong>
                     <span style={{ fontSize: "12px", color: "#607084" }}>{getReportMetaLine(marker.report)}</span>
                   </div>
+
+                  {popupAiState[marker.report.id]?.loading ? (
+                    <div
+                      style={{
+                        borderLeft: "4px solid #2563eb",
+                        background: "#eff6ff",
+                        color: "#1e3a8a",
+                        padding: "8px 10px",
+                        fontSize: "12px",
+                        lineHeight: 1.45
+                      }}
+                    >
+                      AI анализирует...
+                    </div>
+                  ) : null}
 
                   {marker.report.context ? (
                     <div

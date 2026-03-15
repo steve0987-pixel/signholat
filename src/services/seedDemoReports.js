@@ -1,6 +1,7 @@
 import { sampleReports } from "../data/sampleReports";
 import { calculateXP } from "../utils/xp";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
+import { normalizeStatus } from "../constants/statusLifecycle";
 
 const REPORTS_TABLE = import.meta.env.VITE_SUPABASE_REPORTS_TABLE || "reports";
 
@@ -34,7 +35,7 @@ function mapDemoReportToRow(report) {
     place_name: report.placeName || "",
     media_url: mediaUrl,
     media_type: mediaType,
-    status: report.status || "New",
+    status: normalizeStatus(report.status || "Submitted"),
     created_at: createdAt,
     summary: report.summary || null,
     context: report.context || null,

@@ -109,19 +109,20 @@ export const translations = {
       ssv: "Health"
     },
     categories: {
-      "No soap": "No soap",
-      "No water": "No water",
-      "No paper": "No paper",
-      "Broken toilet": "Broken toilet",
-      "Broken sink": "Broken sink",
-      "Construction issue": "Construction issue",
-      "Safety issue": "Safety issue",
+      "School infrastructure": "School infrastructure",
+      "Clinic infrastructure": "Clinic infrastructure",
+      "Drinking water supply": "Drinking water supply",
+      "Internal roads": "Internal roads",
+      "Sanitation and waste": "Sanitation and waste",
+      "Street lighting": "Street lighting",
+      "Public safety": "Public safety",
       Other: "Other"
     },
     statuses: {
-      New: "New",
+      Submitted: "Submitted",
       "Under Review": "Under Review",
       Verified: "Verified",
+      "In Progress": "In Progress",
       Resolved: "Resolved"
     },
     ranks: {
@@ -234,19 +235,20 @@ export const translations = {
       ssv: "Sog'liq"
     },
     categories: {
-      "No soap": "Sovun yo'q",
-      "No water": "Suv yo'q",
-      "No paper": "Qog'oz yo'q",
-      "Broken toilet": "Hojatxona buzilgan",
-      "Broken sink": "Rakvina buzilgan",
-      "Construction issue": "Qurilish muammosi",
-      "Safety issue": "Xavfsizlik muammosi",
+      "School infrastructure": "Maktab infratuzilmasi",
+      "Clinic infrastructure": "Klinika infratuzilmasi",
+      "Drinking water supply": "Ichimlik suvi ta'minoti",
+      "Internal roads": "Ichki yo'llar",
+      "Sanitation and waste": "Sanitariya va chiqindilar",
+      "Street lighting": "Ko'cha yoritilishi",
+      "Public safety": "Jamoat xavfsizligi",
       Other: "Boshqa"
     },
     statuses: {
-      New: "Yangi",
+      Submitted: "Qabul qilindi",
       "Under Review": "Ko'rib chiqilmoqda",
       Verified: "Tasdiqlangan",
+      "In Progress": "Jarayonda",
       Resolved: "Hal qilingan"
     },
     ranks: {

@@ -1004,6 +1004,27 @@ textarea:focus {
   margin: 0;
 }
 
+.ai-description-refine {
+  border: 1px solid #cfe0e8;
+  border-radius: 12px;
+  background: #f7fcff;
+  padding: 10px;
+  display: grid;
+  gap: 7px;
+}
+
+.ai-description-refine strong {
+  font-size: 12px;
+  color: #254f63;
+}
+
+.ai-description-refine p {
+  margin: 0;
+  font-size: 13px;
+  color: #456474;
+  line-height: 1.45;
+}
+
 .ai-duplicate-card {
   border-color: #f2d09f;
   background: #fff7eb;
@@ -1410,4 +1431,19 @@ textarea:focus {
   .streak-card {
     text-align: left;
   }
+}
+
+.status-history-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.status-history-item {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #dbe5f2;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 10px;
 }
